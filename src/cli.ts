@@ -5,6 +5,7 @@ import { getEffectiveConfig, requireApiKey } from './config.js';
 import { M3triqClient, AgentsClient } from './client.js';
 import { registerConfigCommands } from './commands/config-cmd.js';
 import { registerProjectCommands } from './commands/projects.js';
+import { registerSessionCommands } from './commands/sessions.js';
 import { registerJobCommands } from './commands/jobs.js';
 import { registerDockingCommands } from './commands/docking.js';
 import { registerPredictCommands } from './commands/predict.js';
@@ -31,6 +32,7 @@ program
 
 registerConfigCommands(program);
 registerProjectCommands(program);
+registerSessionCommands(program);
 registerJobCommands(program);
 registerDockingCommands(program);
 registerPredictCommands(program);

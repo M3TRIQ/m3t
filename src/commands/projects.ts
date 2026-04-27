@@ -27,6 +27,49 @@ export function registerProjectCommands(program: Command): void {
     });
 
   program
+    .command('project')
+    .argument('<id>', 'Project ID (full or short 8-char)')
+    .description('Show details for a specific project')
+    .action(async (id: string) => {
+      const client = createClient();
+      // Resolve short ID via list
+      let fullId = id;
+      if (!id.includes('-')) {
+        const projects = await client.listProjects();
+        const match = projects.find(p => p.id.startsWith(id));
+        if (!match) {
+          process.stderr.write(`Error: No project found matching "${id}"\n`);
+          process.exit(1);
+        }
+        fullId = match.id;
+      }
+      const project = await client.getProject(fullId);
+      const consoleUrl = getConsoleUrl();
+      const url = `${consoleUrl}/?project=${project.id.substring(0, 8)}`;
+
+      const lines = [
+        `Project:    ${project.name}`,
+        `ID:         ${project.id}`,
+      ];
+      if (project.description) lines.push(`Summary:    ${project.description}`);
+      if (project.owner_name || project.owner_email) lines.push(`Owner:      ${project.owner_name || ''} <${project.owner_email || ''}>`);
+      if (project.user_role) lines.push(`Your role:  ${project.user_role}${project.is_shared ? ' (shared)' : ''}`);
+      if (project.session_count !== undefined) lines.push(`Sessions:   ${project.session_count}`);
+      if (project.member_count !== undefined) lines.push(`Members:    ${project.member_count}`);
+      if (project.created_at) lines.push(`Created:    ${project.created_at}`);
+      if (project.last_activity_at) lines.push(`Last used:  ${project.last_activity_at}`);
+      lines.push(`View:       ${url}`);
+      if (project.context) {
+        lines.push('');
+        lines.push('Project context (knowledge base):');
+        const ctx = project.context.length > 800 ? project.context.substring(0, 800) + '\n…(truncated)' : project.context;
+        lines.push(ctx);
+      }
+
+      output(project, lines.join('\n'));
+    });
+
+  program
     .command('use')
     .argument('<id>', 'Project ID (full or short 8-char)')
     .option('--global', 'Set globally in ~/.m3triq/config.json instead of local .m3triq')

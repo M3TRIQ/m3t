@@ -1,4 +1,4 @@
-import type { Job, Project, DockingParams, BatchDockingParams, DiffDockParams, StructurePredictionParams, SandboxParams, McpCallResult } from './types.js';
+import type { Job, Project, ChatSession, DockingParams, BatchDockingParams, DiffDockParams, StructurePredictionParams, SandboxParams, McpCallResult } from './types.js';
 
 export class M3triqClient {
   private baseUrl: string;
@@ -35,6 +35,24 @@ export class M3triqClient {
   async listProjects(): Promise<Project[]> {
     const data = await this.request<{ results?: Project[] } | Project[]>('GET', '/api/membership/projects/');
     return Array.isArray(data) ? data : (data.results || []);
+  }
+
+  async getProject(projectId: string): Promise<Project> {
+    return this.request<Project>('GET', `/api/membership/projects/${projectId}/`);
+  }
+
+  // ── Chat Sessions ─────────────────────────────────────────────
+
+  async listSessions(projectId: string, limit = 20): Promise<ChatSession[]> {
+    const data = await this.request<{ results?: ChatSession[] } | ChatSession[]>(
+      'GET',
+      `/api/membership/sessions/?project=${projectId}&page_size=${limit}`,
+    );
+    return Array.isArray(data) ? data : (data.results || []);
+  }
+
+  async getSession(sessionId: string): Promise<ChatSession> {
+    return this.request<ChatSession>('GET', `/api/membership/sessions/${sessionId}/`);
   }
 
   async getJob(jobId: string): Promise<Job> {

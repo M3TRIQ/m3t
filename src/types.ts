@@ -3,6 +3,42 @@ export interface Project {
   name: string;
   description: string;
   created_at: string;
+  updated_at?: string;
+  last_activity_at?: string;
+  context?: string;
+  session_count?: number;
+  user_role?: string;
+  owner_email?: string;
+  owner_name?: string;
+  member_count?: number;
+  is_shared?: boolean;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count?: number;
+  has_notes?: boolean;
+  context_notes?: string;
+  project?: string;
+  project_name?: string;
+  user_name?: string;
+  selected_tab?: number;
+  model?: string;
+  messages?: ChatMessage[];
+}
+
+export interface ChatMessage {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  order: number;
+  created_at: string;
+  elapsed_time?: number | null;
+  total_tokens?: number | null;
+  thinking_steps?: unknown[];
 }
 
 export interface Job {
