@@ -26,6 +26,14 @@ export class M3triqClient {
 
     if (!res.ok) {
       const text = await res.text();
+      if (res.status === 402) {
+        let code = '';
+        try { const j = JSON.parse(text); code = j.code || j.error || ''; } catch { /* not JSON */ }
+        if (code === 'subscription_required') {
+          throw new Error('Your free trial has ended. Subscribe to Pro to continue:\n  console.m3triq.com/profile');
+        }
+        throw new Error('Out of credits. Top up or subscribe at console.m3triq.com/profile');
+      }
       throw new Error(`API error ${res.status}: ${text.substring(0, 200)}`);
     }
 

@@ -182,6 +182,12 @@ export interface CreditQuota {
   is_quota_exceeded: boolean;
   last_used?: string | null;
   recent_events?: CreditUsageLogEntry[];
+  // 30-day trial model
+  trial_ends_at?: string | null;
+  has_access?: boolean;
+  in_trial?: boolean;
+  trial_days_remaining?: number | null;
+  topup_locked?: boolean;
 }
 
 export interface CreditLogResponse {

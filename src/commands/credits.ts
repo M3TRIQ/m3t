@@ -39,15 +39,27 @@ export function registerCreditsCommands(program: Command): void {
       }
 
       const remainingClass = q.is_quota_exceeded ? '!! EXHAUSTED' : '';
+      const isTrial = q.tier === 'free' || q.tier === 'beta';
+      const trialEnds = q.trial_ends_at ? new Date(q.trial_ends_at).toLocaleDateString() : null;
       const periodEnd = q.period_end ? new Date(q.period_end).toLocaleDateString() : '—';
 
-      const lines = [
-        `Tier:       ${q.tier}`,
+      const lines: string[] = [`Tier:       ${q.tier}`];
+      if (isTrial) {
+        lines.push(
+          q.in_trial
+            ? `Trial:      ${q.trial_days_remaining ?? 0} day(s) left${trialEnds ? ` — ends ${trialEnds}` : ''}`
+            : `Trial:      ENDED — subscribe to continue`
+        );
+      }
+      lines.push(
         `Used:       ${formatCredits(q.credits_used)} / ${formatCredits(q.monthly_credits)}  ${progressBar(q.credits_used, q.monthly_credits)}  ${formatPercentage(q.usage_percentage || 0)}`,
-        `Top-up:     ${formatCredits(q.topup_credits)}`,
+        `Top-up:     ${formatCredits(q.topup_credits)}${q.topup_locked ? '  (locked — subscribe to use)' : ''}`,
         `Remaining:  ${formatCredits(q.credits_remaining)}  ${remainingClass}`.trimEnd(),
-        `Resets:     ${periodEnd}`,
-      ];
+      );
+      if (!isTrial) lines.push(`Resets:     ${periodEnd}`);
+      if (q.has_access === false) {
+        lines.push('', 'Subscribe to Pro to keep using M3TRIQ:  console.m3triq.com/profile');
+      }
 
       output(q, lines.join('\n'));
     });
