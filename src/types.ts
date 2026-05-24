@@ -97,6 +97,54 @@ export interface DiffDockParams {
   num_samples?: number;
 }
 
+export type Boltz2MoleculeType = 'protein' | 'dna' | 'rna';
+
+export interface Boltz2Polymer {
+  molecule_type: Boltz2MoleculeType;
+  sequence: string;
+  id?: string;
+}
+
+export interface Boltz2Ligand {
+  smiles?: string;
+  ccd_code?: string;
+}
+
+export interface Boltz2McpParams {
+  polymers: Boltz2Polymer[];
+  ligands?: Boltz2Ligand[];
+  recycling_steps?: number;
+  sampling_steps?: number;
+  diffusion_samples?: number;
+  step_scale?: number;
+}
+
+export interface Boltz2McpResult {
+  success?: boolean;
+  model?: string;
+  complex?: string;
+  output_format?: string;
+  diffusion_samples?: number;
+  num_structures_returned?: number;
+  structure_data?: string;
+  confidence_scores?: number[];
+  best_confidence?: number | null;
+  affinities?: Record<string, unknown> | null;
+  metrics?: Record<string, unknown> | null;
+  quality?: string;
+  message?: string;
+  // When the MCP tool errors (e.g., NVIDIA NIM 4xx/5xx), the unwrapped payload
+  // is { error: "...", tool: "..." } with no success flag.
+  error?: string;
+}
+
+export interface Boltz2JobParams {
+  project_id: string;
+  title: string;
+  result_data: Record<string, unknown>;
+  description?: string;
+}
+
 export interface SandboxParams {
   project_id: string;
   script: string;
@@ -111,4 +159,50 @@ export interface McpCallResult {
   error?: string;
   result?: unknown;
   [key: string]: unknown;
+}
+
+export interface CreditUsageLogEntry {
+  event: string;
+  credits: number;
+  job_id?: string | null;
+  note?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface CreditQuota {
+  tier: string;
+  monthly_credits: number;
+  credits_used: number;
+  topup_credits: number;
+  credits_remaining: number;
+  usage_percentage: number;
+  period_start?: string;
+  period_end?: string;
+  is_quota_exceeded: boolean;
+  last_used?: string | null;
+  recent_events?: CreditUsageLogEntry[];
+}
+
+export interface CreditLogResponse {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: CreditUsageLogEntry[];
+}
+
+export interface PricingItem {
+  label: string;
+  unit: string;
+  credits: number;
+  note?: string;
+}
+
+export interface PricingCatalog {
+  credit_usd: number;
+  note: string;
+  jobs: PricingItem[];
+  md_simulation: PricingItem[];
+  sandbox: PricingItem;
+  ai: { label: string; unit: string; range: string };
 }

@@ -1,4 +1,4 @@
-import type { Job, Project, ChatSession, DockingParams, BatchDockingParams, DiffDockParams, StructurePredictionParams, SandboxParams, McpCallResult } from './types.js';
+import type { Job, Project, ChatSession, DockingParams, BatchDockingParams, DiffDockParams, StructurePredictionParams, SandboxParams, McpCallResult, CreditQuota, CreditLogResponse, Boltz2JobParams, PricingCatalog } from './types.js';
 
 export class M3triqClient {
   private baseUrl: string;
@@ -152,8 +152,63 @@ export class M3triqClient {
     return this.request<{ job_id: string }>('POST', endpoint, params);
   }
 
+  async createBoltz2Job(params: Boltz2JobParams): Promise<{ job_id: string }> {
+    // Boltz-2 prediction is run client-side via the agents MCP, then saved here as a completed job.
+    // Mirrors the RFantibody internal flow but with status='completed' and result_data already populated.
+    const url = `${this.baseUrl}/api/jobs/create_prediction_internal/`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        ...this.headers,
+        'X-Internal-Service': 'true',
+      },
+      body: JSON.stringify({
+        project_id: params.project_id,
+        job_type: 'boltz2_prediction',
+        title: params.title,
+        description: params.description ?? '',
+        result_data: params.result_data,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API error ${res.status}: ${text.substring(0, 200)}`);
+    }
+    return res.json() as Promise<{ job_id: string }>;
+  }
+
   async createSandboxJob(params: SandboxParams): Promise<{ job_id: string }> {
     return this.request<{ job_id: string }>('POST', '/api/jobs/create_sandbox_job/', params);
+  }
+
+  // ── Credits ──────────────────────────────────────────────────
+
+  async getCredits(): Promise<CreditQuota> {
+    return this.request<CreditQuota>('GET', '/api/membership/user/credits/');
+  }
+
+  async getCreditLog(params: {
+    page?: number;
+    pageSize?: number;
+    event?: string;
+    since?: string;
+    until?: string;
+  } = {}): Promise<CreditLogResponse> {
+    const q = new URLSearchParams();
+    if (params.page) q.set('page', String(params.page));
+    if (params.pageSize) q.set('page_size', String(params.pageSize));
+    if (params.event) q.set('event', params.event);
+    if (params.since) q.set('since', params.since);
+    if (params.until) q.set('until', params.until);
+    const qs = q.toString();
+    return this.request<CreditLogResponse>(
+      'GET',
+      `/api/membership/user/credits/log/${qs ? `?${qs}` : ''}`,
+    );
+  }
+
+  async getPricing(): Promise<PricingCatalog> {
+    return this.request<PricingCatalog>('GET', '/api/membership/billing/pricing/');
   }
 }
 

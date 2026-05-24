@@ -62,7 +62,7 @@ export function registerDockingCommands(program: Command): void {
       .argument('<smiles>', 'SMILES string of the ligand')
       .argument('<pdb>', 'PDB ID (e.g., 5NJ8) or path to .pdb file')
       .option('--exhaustiveness <n>', 'Search exhaustiveness', parseInt)
-      .description('Dock with GNINA CNN scoring (Azure T4 GPU, ~6s/compound)')
+      .description('Dock with GNINA CNN scoring (GCP T4 GPU, ~3-4 min/job incl. GPU spin-up)')
   ).action(async (smiles: string, pdb: string, opts) => {
     await runSiteDock(smiles, pdb, 'gnina', opts);
   });
@@ -73,7 +73,7 @@ export function registerDockingCommands(program: Command): void {
       .argument('<smiles>', 'SMILES string of the ligand')
       .argument('<pdb>', 'PDB ID (e.g., 5NJ8) or path to .pdb file')
       .option('--exhaustiveness <n>', 'Search exhaustiveness', parseInt)
-      .description('Dock with AutoDock Vina (Cloud Run CPU, ~30s/compound)')
+      .description('Dock with AutoDock Vina (Cloud Run CPU, ~2-3 min/compound)')
   ).action(async (smiles: string, pdb: string, opts) => {
     await runSiteDock(smiles, pdb, 'vina', opts);
   });
@@ -112,7 +112,7 @@ export function registerDockingCommands(program: Command): void {
     batch.command('gnina')
       .argument('<file>', 'Compounds file (CSV/JSON, - for stdin)')
       .argument('<pdb>', 'PDB ID (e.g., 5NJ8) or path to .pdb file')
-      .description('Batch dock with GNINA (~6s/compound)')
+      .description('Batch dock with GNINA (GCP T4 GPU, ~3-4 min/job for small batches)')
   ).action(async (file: string, pdb: string, opts) => {
     await runBatchDock(file, pdb, 'gnina', opts);
   });
@@ -122,7 +122,7 @@ export function registerDockingCommands(program: Command): void {
     batch.command('vina')
       .argument('<file>', 'Compounds file (CSV/JSON, - for stdin)')
       .argument('<pdb>', 'PDB ID (e.g., 5NJ8) or path to .pdb file')
-      .description('Batch dock with Vina (~30s/compound)')
+      .description('Batch dock with Vina (Cloud Run CPU, ~2-3 min/compound)')
   ).action(async (file: string, pdb: string, opts) => {
     await runBatchDock(file, pdb, 'vina', opts);
   });
@@ -156,7 +156,7 @@ async function runSiteDock(
   const url = jobUrl(consoleUrl, project.id, result.job_id);
   maybeOpenBrowser(url);
 
-  const timeEst = method === 'gnina' ? '~6s' : '~30s';
+  const timeEst = method === 'gnina' ? '~3-4 min (incl. GPU spin-up)' : '~2-3 min';
   const data = { job_id: result.job_id, method, url };
   output(data, `${method.toUpperCase()} docking job created\nJob ID: ${result.job_id.substring(0, 8)}\nEstimated: ${timeEst}`);
 }
@@ -190,8 +190,11 @@ async function runBatchDock(
   const url = jobUrl(consoleUrl, project.id, result.job_id);
   maybeOpenBrowser(url);
 
-  const perCompound = method === 'gnina' ? 6 : 30;
-  const totalMin = Math.ceil((compounds.length * perCompound) / 60);
+  // GNINA is provisioning-bound (~constant per job for small batches); Vina
+  // scales per compound on CPU.
+  const totalMin = method === 'gnina'
+    ? Math.max(4, Math.ceil(compounds.length * 0.05))
+    : Math.ceil(compounds.length * 2.5);
   const data = { job_id: result.job_id, compounds: compounds.length, method, url };
   output(data, `${method.toUpperCase()} batch docking created\nJob ID: ${result.job_id.substring(0, 8)}\nCompounds: ${compounds.length}\nEstimated: ~${totalMin} minutes`);
 }

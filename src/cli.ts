@@ -17,13 +17,15 @@ import { registerFoodbCommands } from './commands/foodb.js';
 import { registerAdmetCommands } from './commands/admet.js';
 import { registerMdCommands } from './commands/md.js';
 import { registerZincCommands } from './commands/zinc.js';
+import { registerCreditsCommands } from './commands/credits.js';
+import { registerPricingCommands } from './commands/pricing.js';
 
 const program = new Command();
 
 program
   .name('m3t')
   .description('M3TRIQ — protein-ligand analysis from the terminal')
-  .version('0.1.0')
+  .version('0.2.1')
   .option('--json', 'Output as JSON (machine-readable)')
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.optsWithGlobals();
@@ -44,6 +46,8 @@ registerFoodbCommands(program);
 registerAdmetCommands(program);
 registerMdCommands(program);
 registerZincCommands(program);
+registerCreditsCommands(program);
+registerPricingCommands(program);
 
 // Catch async errors from all command actions
 program.parseAsync().catch((err: Error) => {
