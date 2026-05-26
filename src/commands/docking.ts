@@ -33,20 +33,123 @@ function parseCompoundsFile(filePath: string): Array<{ smiles: string; name?: st
   });
 }
 
-/** Resolve PDB argument: if it's a file path, read content; otherwise return as-is (PDB ID). */
-function resolvePdb(pdb: string): { content: string; label: string } {
+/**
+ * Resolve PDB argument to file content.
+ * - existing file path → read it
+ * - 4-letter PDB ID (e.g. "3HTB") → fetch from RCSB
+ * - anything else (assume raw PDB text already) → return as-is
+ */
+async function resolvePdb(pdb: string): Promise<{ content: string; label: string }> {
   if (fs.existsSync(pdb)) {
     return { content: fs.readFileSync(pdb, 'utf-8'), label: pdb.split('/').pop() || pdb };
+  }
+  if (/^[0-9A-Za-z]{4}$/.test(pdb)) {
+    const id = pdb.toUpperCase();
+    const res = await fetch(`https://files.rcsb.org/download/${id}.pdb`);
+    if (!res.ok) {
+      throw new Error(
+        `PDB '${id}' not found at RCSB (HTTP ${res.status}). ` +
+        `Check the ID at https://rcsb.org/structure/${id} or pass a local .pdb file.`,
+      );
+    }
+    return { content: await res.text(), label: id };
   }
   return { content: pdb, label: pdb };
 }
 
-/** Shared binding site options for site-directed docking (Vina/GNINA) */
+// HETATM residues that are not real ligands — waters, ions, common cryoprotectants
+// and buffer components. Excluded from auto binding-site detection.
+const FILLER_HETATMS = new Set([
+  'HOH','WAT','DOD','D2O',
+  'NA','CL','K','BR','I','F','MG','CA','ZN','FE','MN','CU','NI','CO','CD','HG','PB','BA','CS','SR',
+  'SO4','PO4','BO3','NO3','CO3','HCO3','OH','OXY','PER','SUL','MOO',
+  'GOL','EDO','PEG','PG4','PE4','PGE','MPD','BME','DTT','MRD','BU3','P6G','BTB','EPE','HEPES',
+  'TRS','TRIS','ACT','ACE','FMT','EOH','IPA','DMS','DMF','MES','BES','GLY','CIT','MLT','TLA',
+  'NH4','PYR','HED','BNG','LMT','OLA','OLB','OLC',
+]);
+
+interface DetectedSite {
+  resname: string; chain: string; resnum: number;
+  center: { x: number; y: number; z: number };
+  atomCount: number;
+}
+
+/** Find the largest non-filler HETATM residue and return its centroid. Returns null if none. */
+function autoDetectSite(pdbContent: string): DetectedSite | null {
+  const groups = new Map<string, { resname: string; chain: string; resnum: number; xs: number[]; ys: number[]; zs: number[] }>();
+  for (const line of pdbContent.split('\n')) {
+    if (!line.startsWith('HETATM')) continue;
+    const resname = line.slice(17, 20).trim();
+    if (FILLER_HETATMS.has(resname.toUpperCase())) continue;
+    const chain = line.slice(21, 22).trim() || ' ';
+    const resnum = parseInt(line.slice(22, 26).trim(), 10);
+    const x = parseFloat(line.slice(30, 38));
+    const y = parseFloat(line.slice(38, 46));
+    const z = parseFloat(line.slice(46, 54));
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    const key = `${resname}|${chain}|${resnum}`;
+    let g = groups.get(key);
+    if (!g) { g = { resname, chain, resnum, xs: [], ys: [], zs: [] }; groups.set(key, g); }
+    g.xs.push(x); g.ys.push(y); g.zs.push(z);
+  }
+  let best: { resname: string; chain: string; resnum: number; xs: number[]; ys: number[]; zs: number[] } | null = null;
+  for (const g of groups.values()) {
+    if (!best || g.xs.length > best.xs.length) best = g;
+  }
+  // A real ligand has ≥5 heavy atoms; anything smaller is likely a stray modification.
+  if (!best || best.xs.length < 5) return null;
+  const n = best.xs.length;
+  const mean = (a: number[]) => Math.round((a.reduce((s, v) => s + v, 0) / n) * 1000) / 1000;
+  return {
+    resname: best.resname, chain: best.chain, resnum: best.resnum,
+    center: { x: mean(best.xs), y: mean(best.ys), z: mean(best.zs) },
+    atomCount: n,
+  };
+}
+
+/**
+ * Resolve the binding site for a docking job.
+ * Throws on explicit (0,0,0) (a known agent placeholder). When any coord is
+ * missing, runs autoDetectSite() on the PDB content; logs what was picked to
+ * stderr so the agent sees the decision.
+ */
+function resolveSite(
+  pdbContent: string, pdbLabel: string,
+  cx?: number, cy?: number, cz?: number,
+): { x: number; y: number; z: number } {
+  const allSet = [cx, cy, cz].every(v => typeof v === 'number' && !Number.isNaN(v));
+  const allZero = allSet && cx === 0 && cy === 0 && cz === 0;
+  if (allZero) {
+    throw new Error(
+      `Binding site (0,0,0) is not a valid center. To find real coordinates, ` +
+      `check the co-crystallized ligand at https://rcsb.org/structure/${pdbLabel}/ligands, ` +
+      `or omit --cx/--cy/--cz to auto-detect from the PDB.`,
+    );
+  }
+  if (allSet) return { x: cx as number, y: cy as number, z: cz as number };
+
+  const site = autoDetectSite(pdbContent);
+  if (!site) {
+    throw new Error(
+      `Could not auto-detect a binding site in ${pdbLabel} (no co-crystallized ligand ` +
+      `with ≥5 heavy atoms). Specify --cx/--cy/--cz manually — check ligands at ` +
+      `https://rcsb.org/structure/${pdbLabel}/ligands.`,
+    );
+  }
+  process.stderr.write(
+    `Auto-detected binding site at HETATM ${site.resname} ${site.chain}${site.resnum} ` +
+    `(${site.atomCount} atoms): center=(${site.center.x}, ${site.center.y}, ${site.center.z})\n`,
+  );
+  return site.center;
+}
+
+/** Shared binding site options for site-directed docking (Vina/GNINA).
+ *  Coords are OPTIONAL — if omitted, the CLI auto-detects from the PDB. */
 function addSiteOptions(cmd: ReturnType<Command['command']>) {
   return cmd
-    .requiredOption('--cx <x>', 'Binding site center X', parseFloat)
-    .requiredOption('--cy <y>', 'Binding site center Y', parseFloat)
-    .requiredOption('--cz <z>', 'Binding site center Z', parseFloat)
+    .option('--cx <x>', 'Binding site center X (omit to auto-detect)', parseFloat)
+    .option('--cy <y>', 'Binding site center Y (omit to auto-detect)', parseFloat)
+    .option('--cz <z>', 'Binding site center Z (omit to auto-detect)', parseFloat)
     .option('--sx <x>', 'Search box size X (default: 20)', parseFloat)
     .option('--sy <y>', 'Search box size Y (default: 20)', parseFloat)
     .option('--sz <z>', 'Search box size Z (default: 20)', parseFloat);
@@ -89,7 +192,7 @@ export function registerDockingCommands(program: Command): void {
       const client = createClient();
       const consoleUrl = getConsoleUrl();
 
-      const { content: pdbContent } = resolvePdb(pdb);
+      const { content: pdbContent } = await resolvePdb(pdb);
       const result = await client.createDiffDockJob({
         project_id: project.id,
         ligand_smiles: smiles,
@@ -130,13 +233,14 @@ export function registerDockingCommands(program: Command): void {
 
 async function runSiteDock(
   smiles: string, pdb: string, method: 'vina' | 'gnina',
-  opts: { cx: number; cy: number; cz: number; sx?: number; sy?: number; sz?: number; exhaustiveness?: number },
+  opts: { cx?: number; cy?: number; cz?: number; sx?: number; sy?: number; sz?: number; exhaustiveness?: number },
 ): Promise<void> {
   const project = requireProject();
   const client = createClient();
   const consoleUrl = getConsoleUrl();
 
-  const { content: pdbContent, label: pdbLabel } = resolvePdb(pdb);
+  const { content: pdbContent, label: pdbLabel } = await resolvePdb(pdb);
+  const site = resolveSite(pdbContent, pdbLabel, opts.cx, opts.cy, opts.cz);
   const title = `Dock ${smiles.substring(0, 30)} → ${pdbLabel}`;
   const result = await client.createDockingJob({
     project_id: project.id,
@@ -145,9 +249,9 @@ async function runSiteDock(
     ligand_smiles: smiles,
     scoring_function: method,
     exhaustiveness: opts.exhaustiveness,
-    center_x: opts.cx,
-    center_y: opts.cy,
-    center_z: opts.cz,
+    center_x: site.x,
+    center_y: site.y,
+    center_z: site.z,
     size_x: opts.sx,
     size_y: opts.sy,
     size_z: opts.sz,
@@ -163,14 +267,15 @@ async function runSiteDock(
 
 async function runBatchDock(
   file: string, pdb: string, method: 'vina' | 'gnina',
-  opts: { cx: number; cy: number; cz: number; sx?: number; sy?: number; sz?: number },
+  opts: { cx?: number; cy?: number; cz?: number; sx?: number; sy?: number; sz?: number },
 ): Promise<void> {
   const project = requireProject();
   const client = createClient();
   const consoleUrl = getConsoleUrl();
 
   const compounds = parseCompoundsFile(file);
-  const { content: pdbContent, label: pdbLabel } = resolvePdb(pdb);
+  const { content: pdbContent, label: pdbLabel } = await resolvePdb(pdb);
+  const site = resolveSite(pdbContent, pdbLabel, opts.cx, opts.cy, opts.cz);
   const title = `Batch ${method.toUpperCase()} ${compounds.length} compounds → ${pdbLabel}`;
 
   const result = await client.createBatchDockingJob({
@@ -179,9 +284,9 @@ async function runBatchDock(
     protein_pdb: pdbContent,
     ligand_smiles_list: compounds.map(c => c.smiles),
     scoring_function: method,
-    center_x: opts.cx,
-    center_y: opts.cy,
-    center_z: opts.cz,
+    center_x: site.x,
+    center_y: site.y,
+    center_z: site.z,
     size_x: opts.sx,
     size_y: opts.sy,
     size_z: opts.sz,
