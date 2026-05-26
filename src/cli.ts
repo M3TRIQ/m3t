@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { setJsonMode } from './output.js';
 import { getEffectiveConfig, requireApiKey } from './config.js';
 import { M3triqClient, AgentsClient } from './client.js';
+import { reportCliError } from './errorReporter.js';
 import { registerConfigCommands } from './commands/config-cmd.js';
 import { registerProjectCommands } from './commands/projects.js';
 import { registerSessionCommands } from './commands/sessions.js';
@@ -25,7 +26,7 @@ const program = new Command();
 program
   .name('m3t')
   .description('M3TRIQ — protein-ligand analysis from the terminal')
-  .version('0.2.5')
+  .version('0.2.6')
   .option('--json', 'Output as JSON (machine-readable)')
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.optsWithGlobals();
@@ -49,8 +50,31 @@ registerZincCommands(program);
 registerCreditsCommands(program);
 registerPricingCommands(program);
 
+// Last-line-of-defense catches: anything that escapes a command handler.
+// These fire BEFORE process.exit(), so the reporter has time to flush
+// (it has its own 3-second timeout to bound the wait).
+process.on('uncaughtException', async (err) => {
+  try { await reportCliError(err, { kind: 'uncaughtException' }); } catch {}
+  process.stderr.write(`Error: ${err?.message || String(err)}\n`);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', async (reason) => {
+  try { await reportCliError(reason, { kind: 'unhandledRejection' }); } catch {}
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  process.stderr.write(`Error: ${msg}\n`);
+  process.exit(1);
+});
+
 // Catch async errors from all command actions
-program.parseAsync().catch((err: Error) => {
+program.parseAsync().catch(async (err: Error) => {
+  // Don't beacon commander's own user-facing exits (--help, --version, bad args).
+  const code = (err as Error & { code?: string }).code;
+  const isCommanderExit = typeof code === 'string' && code.startsWith('commander.');
+  if (!isCommanderExit) {
+    try { await reportCliError(err, { kind: 'command' }); } catch {}
+  }
+
   const message = err.message || String(err);
   if (message.includes('API error') || message.includes('MCP')) {
     process.stderr.write(`Error: ${message}\n`);

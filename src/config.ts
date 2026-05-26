@@ -9,6 +9,7 @@ export interface M3triqConfig {
   console_url?: string;
   active_project?: string;
   active_project_name?: string;
+  error_reporting_disabled?: boolean;
 }
 
 interface LocalProjectConfig {
