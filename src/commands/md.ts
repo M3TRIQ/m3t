@@ -14,8 +14,8 @@ export function registerMdCommands(program: Command): void {
   md
     .command('run')
     .option('--protein <pdb>', 'Protein PDB ID or path to .pdb file')
-    .option('--ligand-sdf <sdf>', 'Ligand SDF content or path to .sdf file')
-    .option('--ligand-smiles <smiles>', 'Ligand SMILES (fallback if no SDF)')
+    .option('--ligand-sdf <sdf>', 'Ligand SDF content or path to .sdf file (omit for apo simulation)')
+    .option('--ligand-smiles <smiles>', 'Ligand SMILES (omit for apo simulation)')
     .option('--diffdock-job <id>', 'DiffDock job ID (auto-fetches protein + ligand)')
     .option('--mode <mode>', 'Simulation mode: quick (10ns ~1hr) or standard (50ns ~5hrs)', 'quick')
     .option('--ns <n>', 'Override simulation duration in nanoseconds (1-100)')
@@ -45,7 +45,7 @@ export function registerMdCommands(program: Command): void {
         } else {
           params.protein_pdb = opts.protein;
         }
-        // Resolve ligand
+        // Resolve ligand (optional — omit for apo / protein-only MD)
         if (opts.ligandSdf) {
           if (fs.existsSync(opts.ligandSdf)) {
             params.ligand_sdf = fs.readFileSync(opts.ligandSdf, 'utf-8');
@@ -55,8 +55,7 @@ export function registerMdCommands(program: Command): void {
         } else if (opts.ligandSmiles) {
           params.ligand_smiles = opts.ligandSmiles;
         } else {
-          process.stderr.write('Error: Provide --ligand-sdf or --ligand-smiles\n');
-          process.exit(1);
+          process.stderr.write('Running protein-only (apo) MD — no ligand specified.\n');
         }
       }
 
