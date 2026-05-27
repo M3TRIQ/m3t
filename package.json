@@ -1,13 +1,21 @@
 {
   "name": "m3triq",
-  "version": "0.2.6",
-  "description": "M3TRIQ — protein-ligand analysis from the terminal",
+  "version": "0.2.7",
+  "description": "M3TRIQ \u2014 protein-ligand analysis from the terminal",
   "type": "module",
   "bin": {
     "m3t": "./dist/cli.js"
   },
   "main": "dist/cli.js",
-  "keywords": ["bioinformatics", "chembl", "docking", "protein", "ligand", "drug-discovery", "cli"],
+  "keywords": [
+    "bioinformatics",
+    "chembl",
+    "docking",
+    "protein",
+    "ligand",
+    "drug-discovery",
+    "cli"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/M3TRIQ/m3t.git"
@@ -28,6 +36,8 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "license": "MIT"
 }
