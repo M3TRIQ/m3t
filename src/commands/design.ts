@@ -77,8 +77,8 @@ export function registerDesignCommands(program: Command): void {
     .argument('<target>', 'Target PDB ID (e.g., 6VXX) or path to .pdb file')
     .requiredOption('--hotspots <residues>', 'Binding hotspot residues (e.g., A100,A105,A110)')
     .option('--type <type>', 'Antibody type: nanobody or scfv', 'nanobody')
-    .option('--designs <n>', 'Number of designs (1-10)', parseInt, 3)
-    .option('--seqs <n>', 'Sequences per backbone (1-8)', parseInt, 1)
+    .option('--designs <n>', 'Number of designs (1-10)', (v: string) => parseInt(v, 10), 3)
+    .option('--seqs <n>', 'Sequences per backbone (1-8)', (v: string) => parseInt(v, 10), 1)
     .option('--cdr <loops>', 'CDR loop specs (e.g., H1:7,H2:6,H3:5-13)')
     .description('Design de novo antibodies with RFAntibody (Azure T4 GPU, ~3-5 min)')
     .action(async (target: string, opts) => {

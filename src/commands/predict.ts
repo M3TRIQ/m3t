@@ -34,9 +34,9 @@ export function registerPredictCommands(program: Command): void {
     .option('--dna <seq>', 'DNA sequence (or @path to file). Repeatable.', collectArg, [])
     .option('--rna <seq>', 'RNA sequence (or @path to file). Repeatable.', collectArg, [])
     .option('--ligand <smiles_or_ccd>', 'Ligand as SMILES or CCD code (e.g. ATP). Repeatable.', collectArg, [])
-    .option('--samples <n>', 'Number of structure samples (1-25, default: 1)', parseInt, 1)
-    .option('--recycling <n>', 'Recycling steps (1-10, default: 3)', parseInt, 3)
-    .option('--sampling <n>', 'Diffusion sampling steps (10-1000, default: 50)', parseInt, 50)
+    .option('--samples <n>', 'Number of structure samples (1-25, default: 1)', (v: string) => parseInt(v, 10), 1)
+    .option('--recycling <n>', 'Recycling steps (1-10, default: 3)', (v: string) => parseInt(v, 10), 3)
+    .option('--sampling <n>', 'Diffusion sampling steps (10-1000, default: 50)', (v: string) => parseInt(v, 10), 50)
     .option('--name <name>', 'Custom job title')
     .action(async (opts) => {
       await runBoltz2(opts);
