@@ -27,6 +27,42 @@ export function registerPredictCommands(program: Command): void {
       await runPredict(sequence, 'alphafold2', opts.name);
     });
 
+  // m3t predict esmfold2 — monomer OR multi-chain (antibody-antigen, PPI)
+  predict.command('esmfold2')
+    .description('ESMFold2-Fast: monomer or multi-chain complex prediction (self-hosted A100). Beats AlphaFold3 on antibody-antigen DockQ from single sequence.')
+    .option('--chain <id:seq>', 'Chain in the form "id:sequence" or "id:@path". Repeatable for multi-chain complexes. Example: --chain A:MQIF... --chain B:DIQM...', collectArg, [])
+    .option('--sequence <seq>', 'Single-chain shortcut (auto-assigned chain id "A"). Use --chain for multi-chain.')
+    .option('--loops <n>', 'ESMFold2 recurrent loops, 1-64 (default 10)', (v: string) => parseInt(v, 10), 10)
+    .option('--steps <n>', 'Diffusion sampling steps, 1-200 (default 50)', (v: string) => parseInt(v, 10), 50)
+    .option('--samples <n>', 'Diffusion samples per fold, 1-25 (default 1). >1 = best-by-ipTM/pTM.', (v: string) => parseInt(v, 10), 1)
+    .option('--name <name>', 'Custom job title')
+    .action(async (opts) => {
+      await runEsmfold2(opts);
+    });
+
+  // m3t predict esmfold2-batch — fold a list of complexes from a JSON file
+  predict.command('esmfold2-batch')
+    .argument('<inputs.json>', 'Path to JSON file with an array of {label, chains: [{id, sequence}], optional num_loops/num_sampling_steps/num_diffusion_samples/seed}')
+    .option('--loops <n>', 'Default recurrent loops, 1-64 (per-input overrides)', (v: string) => parseInt(v, 10), 10)
+    .option('--steps <n>', 'Default diffusion sampling steps, 1-200', (v: string) => parseInt(v, 10), 50)
+    .option('--samples <n>', 'Default diffusion samples per fold, 1-25', (v: string) => parseInt(v, 10), 1)
+    .option('--name <name>', 'Custom job title')
+    .description('Batch primitive: fold N complexes in one job (results in input order — no sorting)')
+    .action(async (inputsPath: string, opts) => {
+      await runEsmfold2Batch(inputsPath, opts);
+    });
+
+  // m3t embed esmc — protein-language-model embeddings + pseudo-perplexity
+  const embed = program.command('embed').description('Compute protein-language-model embeddings');
+  embed.command('esmc')
+    .description('ESMC-6B per-residue embeddings + pseudo-perplexity (lower = more "natural" sequence)')
+    .option('--sequence <seq>', 'Single sequence (or @path to file). Repeatable.', collectArg, [])
+    .option('--layer <n>', 'Hidden layer to return: "last" (default) or an integer index', 'last')
+    .option('--name <name>', 'Custom job title')
+    .action(async (opts) => {
+      await runEsmcEmbed(opts);
+    });
+
   // m3t predict boltz2
   predict.command('boltz2')
     .description('Predict biomolecular complex (protein + DNA/RNA + ligand) with binding affinity (Boltz-2 / NVIDIA NIM, ~1-5 min)')
@@ -195,6 +231,172 @@ function parseLigand(input: string): Boltz2Ligand {
   const looksLikeSmiles = /[()\[\]=#@\\/.+-]/.test(input) || /[a-z]/.test(input);
   if (looksLikeCcd && !looksLikeSmiles) return { ccd_code: input };
   return { smiles: input };
+}
+
+// ─── ESMFold2 ──────────────────────────────────────────────────────────────
+
+interface Esmfold2Opts {
+  chain: string[];
+  sequence?: string;
+  loops: number;
+  steps: number;
+  samples: number;
+  name?: string;
+}
+
+async function runEsmfold2(opts: Esmfold2Opts): Promise<void> {
+  const chains: { id: string; sequence: string }[] = [];
+  for (const raw of opts.chain) {
+    const colon = raw.indexOf(':');
+    if (colon <= 0) {
+      process.stderr.write(`Error: --chain must be "id:sequence" or "id:@path", got "${raw}".\n`);
+      process.exit(1);
+    }
+    const id = raw.slice(0, colon).trim();
+    const seq = resolveSequence(raw.slice(colon + 1));
+    if (!id) {
+      process.stderr.write('Error: --chain id cannot be empty.\n');
+      process.exit(1);
+    }
+    chains.push({ id, sequence: seq });
+  }
+  if (chains.length === 0 && opts.sequence) {
+    chains.push({ id: 'A', sequence: resolveSequence(opts.sequence) });
+  }
+  if (chains.length === 0) {
+    process.stderr.write('Error: provide at least one --chain "id:seq" or --sequence "<seq>".\n');
+    process.exit(1);
+  }
+  const totalAa = chains.reduce((s, c) => s + c.sequence.length, 0);
+  if (totalAa > 2048) {
+    process.stderr.write(`Error: total residues ${totalAa} > 2048 (ESMFold2-Fast cap on single GPU).\n`);
+    process.exit(1);
+  }
+
+  const project = requireProject();
+  const client = createClient();
+  const consoleUrl = getConsoleUrl();
+
+  const result = await client.createEsmfold2Job({
+    project_id: project.id,
+    chains,
+    title: opts.name,
+    num_loops: opts.loops,
+    num_sampling_steps: opts.steps,
+    num_diffusion_samples: opts.samples,
+  });
+
+  const url = jobUrl(consoleUrl, project.id, result.job_id);
+  maybeOpenBrowser(url);
+
+  const isComplex = chains.length > 1;
+  const lines = [
+    `ESMFold2 ${isComplex ? `complex (${chains.length} chains)` : 'monomer'} queued`,
+    `Job ID: ${result.job_id.substring(0, 8)}`,
+    `Total residues: ${totalAa}`,
+    `Estimated: ~30-60s warm, ~5-7 min cold start`,
+    `View: ${url}`,
+  ];
+  output(
+    { job_id: result.job_id, n_chains: chains.length, total_residues: totalAa, url },
+    lines.join('\n'),
+  );
+}
+
+// ─── ESMFold2 batch ────────────────────────────────────────────────────────
+
+interface Esmfold2BatchOpts {
+  loops: number;
+  steps: number;
+  samples: number;
+  name?: string;
+}
+
+async function runEsmfold2Batch(inputsPath: string, opts: Esmfold2BatchOpts): Promise<void> {
+  if (!fs.existsSync(inputsPath)) {
+    process.stderr.write(`Error: inputs file not found: ${inputsPath}\n`);
+    process.exit(1);
+  }
+  let inputs: any;
+  try {
+    inputs = JSON.parse(fs.readFileSync(inputsPath, 'utf-8'));
+  } catch (e: any) {
+    process.stderr.write(`Error: ${inputsPath} is not valid JSON (${e.message}).\n`);
+    process.exit(1);
+  }
+  if (!Array.isArray(inputs) || inputs.length === 0) {
+    process.stderr.write('Error: inputs file must contain a non-empty array of {label, chains, ...}.\n');
+    process.exit(1);
+  }
+  for (let i = 0; i < inputs.length; i++) {
+    const inp = inputs[i];
+    if (!inp || !Array.isArray(inp.chains) || inp.chains.length === 0) {
+      process.stderr.write(`Error: input #${i} missing required "chains" array.\n`);
+      process.exit(1);
+    }
+  }
+
+  const project = requireProject();
+  const client = createClient();
+  const consoleUrl = getConsoleUrl();
+
+  const result = await client.createEsmfold2BatchJob({
+    project_id: project.id,
+    inputs,
+    title: opts.name,
+    default_num_loops: opts.loops,
+    default_num_sampling_steps: opts.steps,
+    default_num_diffusion_samples: opts.samples,
+  });
+
+  const url = jobUrl(consoleUrl, project.id, result.job_id);
+  maybeOpenBrowser(url);
+
+  const lines = [
+    `ESMFold2 batch queued (${inputs.length} inputs)`,
+    `Job ID: ${result.job_id.substring(0, 8)}`,
+    `Defaults: loops=${opts.loops}, steps=${opts.steps}, samples=${opts.samples}`,
+    `Results returned in input order — no sorting applied.`,
+    `View: ${url}`,
+  ];
+  output({ job_id: result.job_id, n_inputs: inputs.length, url }, lines.join('\n'));
+}
+
+// ─── ESMC embed ────────────────────────────────────────────────────────────
+
+interface EsmcEmbedOpts {
+  sequence: string[];
+  layer: string;
+  name?: string;
+}
+
+async function runEsmcEmbed(opts: EsmcEmbedOpts): Promise<void> {
+  if (opts.sequence.length === 0) {
+    process.stderr.write('Error: at least one --sequence is required.\n');
+    process.exit(1);
+  }
+  const sequences = opts.sequence.map(resolveSequence);
+  const project = requireProject();
+  const client = createClient();
+  const consoleUrl = getConsoleUrl();
+
+  const result = await client.createEsmcEmbedJob({
+    project_id: project.id,
+    sequences,
+    return_layer: opts.layer,
+    title: opts.name,
+  });
+
+  const url = jobUrl(consoleUrl, project.id, result.job_id);
+  maybeOpenBrowser(url);
+
+  const lines = [
+    `ESMC embedding job queued (${sequences.length} sequence${sequences.length > 1 ? 's' : ''})`,
+    `Job ID: ${result.job_id.substring(0, 8)}`,
+    `Layer: ${opts.layer}`,
+    `View: ${url}`,
+  ];
+  output({ job_id: result.job_id, n_sequences: sequences.length, url }, lines.join('\n'));
 }
 
 function describeComplex(polymers: Boltz2Polymer[], ligands: Boltz2Ligand[]): string {

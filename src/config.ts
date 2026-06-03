@@ -92,6 +92,19 @@ export function saveLocalProject(projectId: string, projectName?: string): void 
  *   2. Global config
  *   3. Defaults
  */
+// Stale console URLs that earlier CLI versions wrote to user configs. Silently
+// upgrade these to the current default so users see correct links without
+// having to manually re-run `m3t config --console ...`.
+const STALE_CONSOLE_URLS = new Set([
+  'https://app.m3triq.com',
+  'http://app.m3triq.com',
+]);
+
+function migrateConsoleUrl(fromFile?: string): string | undefined {
+  if (!fromFile) return undefined;
+  return STALE_CONSOLE_URLS.has(fromFile) ? undefined : fromFile;
+}
+
 export function getEffectiveConfig(): M3triqConfig {
   const file = loadConfig();
   const local = loadLocalProject();
@@ -100,7 +113,7 @@ export function getEffectiveConfig(): M3triqConfig {
     api_key: process.env.M3TRIQ_API_KEY || file.api_key,
     api_url: process.env.M3TRIQ_API_URL || file.api_url || 'https://server.m3triq.com',
     agents_url: process.env.M3TRIQ_AGENTS_URL || file.agents_url || 'https://agents.m3triq.com',
-    console_url: process.env.M3TRIQ_CONSOLE_URL || file.console_url || 'https://console.m3triq.com',
+    console_url: process.env.M3TRIQ_CONSOLE_URL || migrateConsoleUrl(file.console_url) || 'https://console.m3triq.com',
     // Local project takes precedence over global
     active_project: local?.project_id || file.active_project,
     active_project_name: local?.project_name || file.active_project_name,

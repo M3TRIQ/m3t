@@ -160,6 +160,40 @@ export class M3triqClient {
     return this.request<{ job_id: string }>('POST', endpoint, params);
   }
 
+  async createEsmfold2Job(params: {
+    project_id: string;
+    chains: { id: string; sequence: string }[];
+    title?: string;
+    num_loops?: number;
+    num_sampling_steps?: number;
+    num_diffusion_samples?: number;
+    seed?: number;
+  }): Promise<{ job_id: string }> {
+    return this.request<{ job_id: string }>('POST', '/api/jobs/create_esmfold2_prediction/', params);
+  }
+
+  async createEsmcEmbedJob(params: {
+    project_id: string;
+    sequences: string[];
+    title?: string;
+    return_layer?: string;
+  }): Promise<{ job_id: string }> {
+    return this.request<{ job_id: string }>('POST', '/api/jobs/create_esmc_embed/', params);
+  }
+
+  async createEsmfold2BatchJob(params: {
+    project_id: string;
+    inputs: { label?: string; chains: { id: string; sequence: string }[];
+              num_loops?: number; num_sampling_steps?: number;
+              num_diffusion_samples?: number; seed?: number }[];
+    title?: string;
+    default_num_loops?: number;
+    default_num_sampling_steps?: number;
+    default_num_diffusion_samples?: number;
+  }): Promise<{ job_id: string }> {
+    return this.request<{ job_id: string }>('POST', '/api/jobs/create_esmfold2_batch/', params);
+  }
+
   async createBoltz2Job(params: Boltz2JobParams): Promise<{ job_id: string }> {
     // Boltz-2 prediction is run client-side via the agents MCP, then saved here as a completed job.
     // Mirrors the RFantibody internal flow but with status='completed' and result_data already populated.

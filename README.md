@@ -84,8 +84,25 @@ m3t md results <job-id>
 ## Structure Prediction
 
 ```bash
-m3t predict esmfold MKFLILLFNILCL...       # Fast (~10s, max 1024aa)
-m3t predict alphafold2 MKFLILLFNILCL...     # Accurate (~5min, max 2048aa)
+m3t predict esmfold MKFLILLFNILCL...        # Fast (~10s, max 1024aa)
+m3t predict alphafold2 MKFLILLFNILCL...     # Accurate (~15-20min, max 2048aa)
+
+# ESMFold2-Fast — monomer or multi-chain complex (self-hosted A100, max 2048aa total).
+# Beats AlphaFold3 on antibody-antigen DockQ from single sequence; returns pLDDT/pTM/ipTM.
+m3t predict esmfold2 --sequence MKFLILLFNILCL...              # monomer
+m3t predict esmfold2 --chain A:EVQL... --chain B:DIQM...      # complex (antibody-antigen, PPI)
+m3t predict esmfold2-batch inputs.json                        # fold N complexes (results in input order)
+
+# Boltz-2 — biomolecular complex (protein + DNA/RNA + ligand) with binding affinity
+m3t predict boltz2 --protein MKFL... --ligand "CC(=O)O" --rna GGUC...
+```
+
+## Protein Embeddings
+
+```bash
+# ESMC-6B per-residue embeddings + pseudo-perplexity (lower = more "natural" sequence)
+m3t embed esmc --sequence MKFLILLFNILCL...           # single sequence
+m3t embed esmc --sequence SEQ1 --sequence SEQ2       # batch (repeatable, max 32)
 ```
 
 ## Protein Design

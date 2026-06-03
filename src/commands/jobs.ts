@@ -67,29 +67,62 @@ export function registerJobCommands(program: Command): void {
     .command('job')
     .argument('<id>', 'Job ID (full or short 8-char)')
     .description('Get job status and results')
-    .action(async (id: string) => {
+    .option('-w, --watch', 'Poll until the job completes (or fails), redrawing in place every 5s')
+    .option('--interval <sec>', 'Poll interval in seconds when --watch (default 5)', (v: string) => parseInt(v, 10), 5)
+    .action(async (id: string, opts: { watch?: boolean; interval: number }) => {
       const project = requireProject();
       const client = createClient();
       const fullId = await resolveJobId(client, project.id, id);
-      const job = await client.getJob(fullId);
-
       const consoleUrl = getConsoleUrl();
-      const url = jobUrl(consoleUrl, project.id, job.id);
 
-      const lines = [
-        `Job:      ${job.title || job.id}`,
-        `Type:     ${job.job_type}`,
-        `Status:   ${job.status}`,
-        `Progress: ${job.progress_percentage}%`,
-      ];
-      if (job.current_step) lines.push(`Step:     ${job.current_step}`);
-      if (job.completed_at) lines.push(`Done:     ${job.completed_at}`);
-      if (job.result_data && job.status === 'completed') {
-        const summary = summarizeResults(job.job_type, job.result_data);
-        if (summary) lines.push(summary);
+      const renderJob = (job: any): string => {
+        const url = jobUrl(consoleUrl, project.id, job.id);
+        const lines = [
+          `Job:      ${job.title || job.id}`,
+          `Type:     ${job.job_type}`,
+          `Status:   ${job.status}`,
+          `Progress: ${job.progress_percentage}%`,
+        ];
+        if (job.current_step) lines.push(`Step:     ${job.current_step}`);
+        if (job.completed_at) lines.push(`Done:     ${job.completed_at}`);
+        if (job.result_data && job.status === 'completed') {
+          const summary = summarizeResults(job.job_type, job.result_data);
+          if (summary) lines.push(summary);
+        }
+        lines.push(`View:     ${url}`);
+        return lines.join('\n');
+      };
+
+      // Single snapshot (default) — matches previous behavior
+      if (!opts.watch) {
+        const job = await client.getJob(fullId);
+        output(job, renderJob(job));
+        return;
       }
-      lines.push(`View:     ${url}`);
 
-      output(job, lines.join('\n'));
+      // Watch mode: redraw in place until terminal status. Falls back to
+      // append-only output when stdout isn't a TTY (e.g. piped to a file).
+      const terminalStatuses = new Set(['completed', 'failed', 'cancelled']);
+      const intervalMs = Math.max(2, opts.interval) * 1000;
+      const isTty = !!process.stdout.isTTY;
+      let lastLineCount = 0;
+
+      // Disable JSON mode in watch — we're emitting frames, not a single result.
+      while (true) {
+        const job = await client.getJob(fullId);
+        const frame = renderJob(job);
+        if (isTty) {
+          // Move cursor up + clear the previous render before printing the new one.
+          if (lastLineCount > 0) {
+            process.stdout.write(`\x1b[${lastLineCount}A\x1b[0J`);
+          }
+          process.stdout.write(frame + '\n');
+          lastLineCount = frame.split('\n').length;
+        } else {
+          process.stdout.write(`---\n${frame}\n`);
+        }
+        if (terminalStatuses.has(job.status)) return;
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
     });
 }
