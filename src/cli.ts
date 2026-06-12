@@ -10,6 +10,7 @@ import { registerSessionCommands } from './commands/sessions.js';
 import { registerJobCommands } from './commands/jobs.js';
 import { registerDockingCommands } from './commands/docking.js';
 import { registerPredictCommands } from './commands/predict.js';
+import { registerMsaCommands } from './commands/msa.js';
 import { registerChemblCommands } from './commands/chembl.js';
 import { registerSandboxCommands } from './commands/sandbox.js';
 import { registerDesignCommands } from './commands/design.js';
@@ -26,7 +27,7 @@ const program = new Command();
 program
   .name('m3t')
   .description('M3TRIQ — protein-ligand analysis from the terminal')
-  .version('0.2.10')
+  .version('0.2.11')
   .option('--json', 'Output as JSON (machine-readable)')
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.optsWithGlobals();
@@ -39,6 +40,7 @@ registerSessionCommands(program);
 registerJobCommands(program);
 registerDockingCommands(program);
 registerPredictCommands(program);
+registerMsaCommands(program);
 registerChemblCommands(program);
 registerSandboxCommands(program);
 registerDesignCommands(program);

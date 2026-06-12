@@ -194,6 +194,35 @@ export class M3triqClient {
     return this.request<{ job_id: string }>('POST', '/api/jobs/create_esmfold2_batch/', params);
   }
 
+  async createMsaJob(params: {
+    project_id: string;
+    chains: { id: string; sequence: string }[];
+    depth: 'fast' | 'deep';
+    pair: boolean;
+    title?: string;
+  }): Promise<{ job_id: string; task_id?: string; depth?: string; n_chains?: number }> {
+    // MSA generation is an async job created via the internal prediction endpoint
+    // (same path Boltz-2 uses). The server's is_msa branch keys off job_type.
+    const url = `${this.baseUrl}/api/jobs/create_prediction_internal/`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...this.headers, 'X-Internal-Service': 'true' },
+      body: JSON.stringify({
+        project_id: params.project_id,
+        job_type: 'msa_generation',
+        title: params.title,
+        chains: params.chains,
+        depth: params.depth,
+        pair: params.pair,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API error ${res.status}: ${text.substring(0, 200)}`);
+    }
+    return res.json() as Promise<{ job_id: string; task_id?: string; depth?: string; n_chains?: number }>;
+  }
+
   async createBoltz2Job(params: Boltz2JobParams): Promise<{ job_id: string }> {
     // Boltz-2 prediction is run client-side via the agents MCP, then saved here as a completed job.
     // Mirrors the RFantibody internal flow but with status='completed' and result_data already populated.
