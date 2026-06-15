@@ -18,21 +18,14 @@ export function registerPredictCommands(program: Command): void {
       await runPredict(sequence, 'esmfold', opts.name);
     });
 
-  // m3t predict alphafold2 — RETIRED (the alphafold2-nim VM was decommissioned in
-  // favour of ESMFold2). Kept as a signpost so scripts get a clear redirect instead
-  // of a job that silently fails on the deleted backend.
+  // m3t predict alphafold2 — AF2 (ptm) monomer via the self-hosted ColabFold service
+  // (the alphafold2-nim VM was retired; same AF2 weights, deep MSA from m3t_msa_server).
   predict.command('alphafold2')
-    .argument('[sequence]', 'Amino acid sequence (single letter codes)')
+    .argument('<sequence>', 'Amino acid sequence (single letter codes, max 2048aa)')
     .option('--name <name>', 'Name for the prediction')
-    .description('[RETIRED → use `predict esmfold2`] AlphaFold2 single-sequence prediction')
-    .action(async () => {
-      process.stderr.write(
-        'AlphaFold2 has been retired (the self-hosted backend was decommissioned).\n' +
-        'Use ESMFold2 instead — higher accuracy and it folds complexes too:\n' +
-        '  m3t predict esmfold2 --sequence <seq>            # monomer\n' +
-        '  m3t predict esmfold2 --chain A:<seq> --chain B:<seq>   # complex\n',
-      );
-      process.exit(2);
+    .description('AlphaFold2 (ptm) monomer prediction — deep MSA + ColabFold (~5-15 min, +cold start)')
+    .action(async (sequence: string, opts) => {
+      await runPredict(sequence, 'alphafold2', opts.name);
     });
 
   // m3t predict esmfold2 — monomer OR multi-chain (antibody-antigen, PPI)
@@ -117,7 +110,7 @@ async function runPredict(sequence: string, method: 'esmfold' | 'alphafold2', na
   const url = jobUrl(consoleUrl, project.id, result.job_id);
   maybeOpenBrowser(url);
 
-  const timeEst = method === 'alphafold2' ? '~15-20 minutes (varies with length)' : '~10 seconds';
+  const timeEst = method === 'alphafold2' ? '~5-15 minutes (deep MSA + ColabFold; +cold start)' : '~10 seconds';
   const data = { job_id: result.job_id, method, sequence_length: sequence.length, url };
   output(data, `${method} prediction created\nJob ID: ${result.job_id.substring(0, 8)}\nLength: ${sequence.length} residues\nEstimated: ${timeEst}`);
 }
