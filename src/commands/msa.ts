@@ -5,15 +5,25 @@ import { requireProject } from '../config.js';
 import { output } from '../output.js';
 import { jobUrl, maybeOpenBrowser } from '../url.js';
 
-// m3t msa — generate a multiple-sequence alignment (a3m) for one or more chains.
-// fast = AlphaFold2-NIM reduced DBs; deep = self-hosted ColabFold (UniRef30 +
-// species-paired) on an A100. Produces a downloadable .a3m artifact per chain.
+// m3t msa — generate a multiple-sequence alignment (a3m) for one or more chains,
+// all on the self-hosted ColabFold MSA-search engine (GPU-MMseqs2):
+//   fast        = UniRef30, shallow, no pairing (quick triage)
+//   deep        = UniRef30, full depth + species pairing (complexes/hard families)
+//   exhaustive  = deep + the metagenomic envDB (remote-homology / orphan families)
+//   custom      = you pick the databases (+ max_sequences / pairing)
+// --templates also searches the PDB and saves per-chain structural templates.
+// Produces a downloadable .a3m artifact per chain (+ templates_<chain>.json).
+const MSA_DEPTHS = ['fast', 'deep', 'exhaustive', 'custom'];
+
 export function registerMsaCommands(program: Command): void {
   program.command('msa')
     .description('Generate a multiple-sequence alignment (a3m) — per-chain and (for complexes) species-paired')
     .option('--chain <id:seq>', 'Chain as "id:sequence" or "id:@path". Repeatable for multi-chain (paired) MSAs.', collectArg, [])
     .option('--sequence <seq>', 'Single-chain shortcut (chain id "A"). Use --chain for multi-chain.')
-    .option('--depth <tier>', 'MSA depth: "fast" (reduced DBs, ~quick) or "deep" (ColabFold UniRef30 + paired, A100)', 'fast')
+    .option('--depth <tier>', 'MSA depth: fast | deep | exhaustive | custom (see `m3t msa --help`)', 'fast')
+    .option('--templates', 'Also search the PDB for structural templates; saves a templates_<chain>.json per chain.')
+    .option('--databases <csv>', 'For --depth custom: comma-separated database ids (e.g. "uniref30,envdb"). See get_msa_capabilities.')
+    .option('--max-sequences <n>', 'For --depth custom: alignment depth/breadth cap.', (v: string) => parseInt(v, 10))
     .option('--pair', 'Compute species-paired MSA across chains (complexes). Default on for ≥2 distinct chains.')
     .option('--no-pair', 'Skip paired MSA (per-chain only).')
     .option('--name <name>', 'Custom job title')
@@ -26,15 +36,29 @@ interface MsaOpts {
   chain: string[];
   sequence?: string;
   depth: string;
+  templates?: boolean;
+  databases?: string;
+  maxSequences?: number;
   pair: boolean;            // commander sets true unless --no-pair is given
   name?: string;
 }
 
 async function runMsa(opts: MsaOpts): Promise<void> {
   const depth = (opts.depth || 'fast').toLowerCase();
-  if (depth !== 'fast' && depth !== 'deep') {
-    process.stderr.write(`Error: --depth must be "fast" or "deep", got "${opts.depth}".\n`);
+  if (!MSA_DEPTHS.includes(depth)) {
+    process.stderr.write(`Error: --depth must be one of ${MSA_DEPTHS.join(' | ')}, got "${opts.depth}".\n`);
     process.exit(1);
+  }
+
+  // Build the custom config when depth=custom.
+  let custom: { databases: string[]; max_sequences?: number; pair?: boolean } | undefined;
+  if (depth === 'custom') {
+    const databases = (opts.databases || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (databases.length === 0) {
+      process.stderr.write('Error: --depth custom requires --databases (e.g. --databases "uniref30,envdb").\n');
+      process.exit(1);
+    }
+    custom = { databases, max_sequences: opts.maxSequences, pair: opts.pair };
   }
 
   const chains: { id: string; sequence: string }[] = [];
@@ -63,6 +87,7 @@ async function runMsa(opts: MsaOpts): Promise<void> {
   // pair only matters for ≥2 distinct chains; let the server make the final call too.
   const distinct = new Set(chains.map(c => c.sequence));
   const pair = opts.pair && chains.length >= 2 && distinct.size >= 2;
+  const templates = !!opts.templates;
 
   const project = requireProject();
   const client = createClient();
@@ -71,26 +96,31 @@ async function runMsa(opts: MsaOpts): Promise<void> {
   const result = await client.createMsaJob({
     project_id: project.id,
     chains,
-    depth: depth as 'fast' | 'deep',
+    depth: depth as 'fast' | 'deep' | 'exhaustive' | 'custom',
     pair,
+    templates,
+    custom,
     title: opts.name,
   });
 
   const url = jobUrl(consoleUrl, project.id, result.job_id);
   maybeOpenBrowser(url);
 
-  const timeEst = depth === 'deep'
-    ? '~3-10 min (ColabFold A100; +cold start if scaled to zero)'
-    : '~2-5 min (reduced DBs; +cold start if scaled to zero)';
+  const timeEst = depth === 'exhaustive'
+    ? '~4-6 min (ColabFold UniRef30 + envDB on 2 T4s; +cold start if scaled to zero)'
+    : depth === 'fast'
+      ? '~2-4 min (ColabFold UniRef30; +cold start if scaled to zero)'
+      : '~3-5 min (ColabFold UniRef30 + paired; +cold start if scaled to zero)';
+  const extras = [pair ? 'paired' : '', templates ? '+templates' : ''].filter(Boolean).join(', ');
   const lines = [
-    `MSA job queued (${chains.length} chain${chains.length > 1 ? 's' : ''}, depth=${depth}${pair ? ', paired' : ''})`,
+    `MSA job queued (${chains.length} chain${chains.length > 1 ? 's' : ''}, depth=${depth}${extras ? `, ${extras}` : ''})`,
     `Job ID: ${result.job_id.substring(0, 8)}`,
     `Estimated: ${timeEst}`,
-    `Output: one .a3m artifact per chain (Files tab)`,
+    `Output: one .a3m artifact per chain${templates ? ' (+ templates_<chain>.json)' : ''} (Files tab)`,
     `View: ${url}`,
   ];
   output(
-    { job_id: result.job_id, n_chains: chains.length, depth, pair, url },
+    { job_id: result.job_id, n_chains: chains.length, depth, pair, templates, url },
     lines.join('\n'),
   );
 }

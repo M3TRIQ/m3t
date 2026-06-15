@@ -4,7 +4,7 @@ import { createAgentsClient, createClient, getConsoleUrl } from '../cli.js';
 import { requireProject } from '../config.js';
 import { output } from '../output.js';
 import { jobUrl, maybeOpenBrowser } from '../url.js';
-import type { Boltz2Ligand, Boltz2McpResult, Boltz2Polymer } from '../types.js';
+import type { Boltz2Ligand, Boltz2McpResult, Boltz2Polymer, Openfold3McpResult, Openfold3Molecule } from '../types.js';
 
 export function registerPredictCommands(program: Command): void {
   const predict = program.command('predict').description('Predict 3D structure from sequence (single protein or biomolecular complex)');
@@ -18,13 +18,21 @@ export function registerPredictCommands(program: Command): void {
       await runPredict(sequence, 'esmfold', opts.name);
     });
 
-  // m3t predict alphafold2
+  // m3t predict alphafold2 — RETIRED (the alphafold2-nim VM was decommissioned in
+  // favour of ESMFold2). Kept as a signpost so scripts get a clear redirect instead
+  // of a job that silently fails on the deleted backend.
   predict.command('alphafold2')
-    .argument('<sequence>', 'Amino acid sequence (single letter codes, max 2048aa)')
+    .argument('[sequence]', 'Amino acid sequence (single letter codes)')
     .option('--name <name>', 'Name for the prediction')
-    .description('High-accuracy prediction with AlphaFold2 (~15-20 min, varies with length; scale-to-zero VM)')
-    .action(async (sequence: string, opts) => {
-      await runPredict(sequence, 'alphafold2', opts.name);
+    .description('[RETIRED → use `predict esmfold2`] AlphaFold2 single-sequence prediction')
+    .action(async () => {
+      process.stderr.write(
+        'AlphaFold2 has been retired (the self-hosted backend was decommissioned).\n' +
+        'Use ESMFold2 instead — higher accuracy and it folds complexes too:\n' +
+        '  m3t predict esmfold2 --sequence <seq>            # monomer\n' +
+        '  m3t predict esmfold2 --chain A:<seq> --chain B:<seq>   # complex\n',
+      );
+      process.exit(2);
     });
 
   // m3t predict esmfold2 — monomer OR multi-chain (antibody-antigen, PPI)
@@ -76,6 +84,21 @@ export function registerPredictCommands(program: Command): void {
     .option('--name <name>', 'Custom job title')
     .action(async (opts) => {
       await runBoltz2(opts);
+    });
+
+  // m3t predict openfold3
+  predict.command('openfold3')
+    .description('Predict biomolecular complex (protein + DNA/RNA + ligand) with OpenFold3 / AlphaFold3-class (NVIDIA NIM). Real MSAs + optional PDB templates.')
+    .option('--protein <seq>', 'Protein sequence (or @path to file). Repeatable for multi-chain complexes.', collectArg, [])
+    .option('--dna <seq>', 'DNA sequence (or @path to file). Repeatable.', collectArg, [])
+    .option('--rna <seq>', 'RNA sequence (or @path to file). Repeatable.', collectArg, [])
+    .option('--ligand <smiles_or_ccd>', 'Ligand as SMILES or CCD code (e.g. ATP). Repeatable.', collectArg, [])
+    .option('--depth <tier>', 'MSA depth for protein chains: fast | deep | exhaustive | none (default fast)', 'fast')
+    .option('--templates', 'Seed the fold with PDB structural templates per protein chain (OpenFold3 self-aligns).')
+    .option('--samples <n>', 'Number of diffusion samples (1-25, default: 1)', (v: string) => parseInt(v, 10), 1)
+    .option('--name <name>', 'Custom job title')
+    .action(async (opts) => {
+      await runOpenfold3(opts);
     });
 }
 
@@ -198,6 +221,113 @@ async function runBoltz2(opts: Boltz2Opts): Promise<void> {
       affinities: result.affinities,
       url,
     },
+    lines.join('\n'),
+  );
+}
+
+interface Openfold3Opts {
+  protein: string[];
+  dna: string[];
+  rna: string[];
+  ligand: string[];
+  depth: string;
+  templates?: boolean;
+  samples: number;
+  name?: string;
+}
+
+async function runOpenfold3(opts: Openfold3Opts): Promise<void> {
+  const depth = (opts.depth || 'fast').toLowerCase();
+  const OF3_DEPTHS = ['fast', 'deep', 'exhaustive', 'custom', 'none'];
+  if (!OF3_DEPTHS.includes(depth)) {
+    process.stderr.write(`Error: --depth must be one of ${OF3_DEPTHS.join(' | ')}, got "${opts.depth}".\n`);
+    process.exit(1);
+  }
+
+  // Build the OpenFold3 molecules array (proteins get chain ids A, B, ...).
+  const molecules: Openfold3Molecule[] = [];
+  const chainIds = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  let ci = 0;
+  for (const seq of opts.protein) molecules.push({ type: 'protein', sequence: resolveSequence(seq), id: chainIds[ci++] });
+  for (const seq of opts.dna) molecules.push({ type: 'dna', sequence: resolveSequence(seq), id: chainIds[ci++] });
+  for (const seq of opts.rna) molecules.push({ type: 'rna', sequence: resolveSequence(seq), id: chainIds[ci++] });
+  for (const lig of opts.ligand) {
+    const parsed = parseLigand(lig);
+    molecules.push({ type: 'ligand', id: chainIds[ci++], ...('ccd_code' in parsed ? { ccd_codes: [parsed.ccd_code!] } : { smiles: parsed.smiles }) });
+  }
+
+  if (molecules.length === 0) {
+    process.stderr.write('Error: at least one --protein, --dna, --rna, or --ligand is required.\n');
+    process.exit(1);
+  }
+
+  const project = requireProject();
+  const client = createClient();
+  const agents = createAgentsClient();
+  const consoleUrl = getConsoleUrl();
+
+  const summary = molecules.map(m => `${m.type}(${m.id})`).join(' + ');
+  process.stderr.write(`OpenFold3: ${summary} (depth=${depth}${opts.templates ? ', +templates' : ''})\n`);
+  process.stderr.write('Running prediction (NVIDIA NIM; real MSA may cold-start the engine, up to a few min)...');
+
+  const startTime = Date.now();
+  const mcpData = await agents.callMcpTool('bionemo', 'predict_complex_structure_openfold3', {
+    molecules,
+    msa_depth: depth,
+    templates: !!opts.templates,
+    diffusion_samples: opts.samples,
+    output_format: 'pdb',
+  });
+
+  const result = mcpData as unknown as Openfold3McpResult;
+  if (result.error || !result.success) {
+    const msg = result.error ?? result.message ?? 'Unknown error';
+    process.stderr.write(`\nFailed: ${msg}\n`);
+    process.exit(1);
+  }
+
+  const elapsed = Math.round((Date.now() - startTime) / 1000);
+  process.stderr.write(` done (${elapsed}s).\n`);
+
+  const conf = result.confidence ?? {};
+  const title = opts.name ?? `OpenFold3: ${result.complex || summary}`;
+  const job = await client.createOpenfold3Job({
+    project_id: project.id,
+    title,
+    description: `OpenFold3 complex prediction. ${result.quality ?? ''}`.trim(),
+    result_data: {
+      complex: result.complex,
+      structure_data: result.structure_data,
+      output_format: result.output_format,
+      confidence: result.confidence,
+      quality: result.quality,
+      num_structures_returned: result.num_structures_returned,
+      diffusion_samples: result.diffusion_samples,
+      inference_time_seconds: result.inference_time_seconds,
+      msa_depth: depth,
+      templates_requested: !!opts.templates,
+      templates_applied: !!result.templates_applied,
+      model: 'openfold3',
+    },
+  });
+
+  const url = jobUrl(consoleUrl, project.id, job.job_id);
+  maybeOpenBrowser(url);
+
+  const lines = [
+    `OpenFold3 prediction complete in ${elapsed}s`,
+    `Job ID: ${job.job_id.substring(0, 8)}`,
+    `Complex: ${result.complex}`,
+    `Quality: ${result.quality ?? 'unknown'}`,
+  ];
+  if (conf.iptm !== null && conf.iptm !== undefined) lines.push(`ipTM: ${conf.iptm.toFixed(3)}`);
+  if (conf.ptm !== null && conf.ptm !== undefined) lines.push(`pTM: ${conf.ptm.toFixed(3)}`);
+  if (conf.plddt !== null && conf.plddt !== undefined) lines.push(`pLDDT: ${conf.plddt}`);
+  if (opts.templates) lines.push(`Templates: ${result.templates_applied ? 'applied' : 'requested but not applied (NIM dropped them)'}`);
+  lines.push(`View: ${url}`);
+
+  output(
+    { job_id: job.job_id, elapsed_seconds: elapsed, complex: result.complex, quality: result.quality, confidence: result.confidence, msa_depth: depth, templates_requested: !!opts.templates, templates_applied: !!result.templates_applied, url },
     lines.join('\n'),
   );
 }

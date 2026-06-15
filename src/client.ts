@@ -197,8 +197,10 @@ export class M3triqClient {
   async createMsaJob(params: {
     project_id: string;
     chains: { id: string; sequence: string }[];
-    depth: 'fast' | 'deep';
+    depth: 'fast' | 'deep' | 'exhaustive' | 'custom';
     pair: boolean;
+    templates?: boolean;
+    custom?: { databases: string[]; max_sequences?: number; pair?: boolean };
     title?: string;
   }): Promise<{ job_id: string; task_id?: string; depth?: string; n_chains?: number }> {
     // MSA generation is an async job created via the internal prediction endpoint
@@ -214,6 +216,8 @@ export class M3triqClient {
         chains: params.chains,
         depth: params.depth,
         pair: params.pair,
+        templates: params.templates ?? false,
+        ...(params.custom ? { custom: params.custom } : {}),
       }),
     });
     if (!res.ok) {
@@ -236,6 +240,28 @@ export class M3triqClient {
       body: JSON.stringify({
         project_id: params.project_id,
         job_type: 'boltz2_prediction',
+        title: params.title,
+        description: params.description ?? '',
+        result_data: params.result_data,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API error ${res.status}: ${text.substring(0, 200)}`);
+    }
+    return res.json() as Promise<{ job_id: string }>;
+  }
+
+  async createOpenfold3Job(params: Boltz2JobParams): Promise<{ job_id: string }> {
+    // OpenFold3 prediction runs client-side via the agents MCP, then is saved here
+    // as a completed job (same internal path Boltz-2 uses; server is_openfold3 branch).
+    const url = `${this.baseUrl}/api/jobs/create_prediction_internal/`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...this.headers, 'X-Internal-Service': 'true' },
+      body: JSON.stringify({
+        project_id: params.project_id,
+        job_type: 'openfold3_prediction',
         title: params.title,
         description: params.description ?? '',
         result_data: params.result_data,

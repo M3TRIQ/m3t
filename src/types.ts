@@ -145,6 +145,38 @@ export interface Boltz2JobParams {
   description?: string;
 }
 
+// OpenFold3 (AlphaFold3-class) complex prediction via the bionemo MCP.
+export interface Openfold3Molecule {
+  type: 'protein' | 'dna' | 'rna' | 'ligand';
+  sequence?: string;
+  id?: string;
+  smiles?: string;
+  ccd_codes?: string[];
+}
+
+export interface Openfold3McpResult {
+  success?: boolean;
+  model?: string;
+  complex?: string;
+  output_format?: string;
+  diffusion_samples?: number;
+  num_structures_returned?: number;
+  structure_data?: string;
+  confidence?: {
+    plddt?: number | null;
+    ptm?: number | null;
+    iptm?: number | null;
+    confidence_score?: number | null;
+    pde?: number | null;
+  } | null;
+  quality?: string;
+  templates_applied?: boolean;
+  inference_time_seconds?: number | null;
+  message?: string;
+  // On MCP/NIM error the unwrapped payload is { error, tool } with no success flag.
+  error?: string;
+}
+
 export interface SandboxParams {
   project_id: string;
   script: string;
