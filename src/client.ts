@@ -197,7 +197,7 @@ export class M3triqClient {
   async createMsaJob(params: {
     project_id: string;
     chains: { id: string; sequence: string }[];
-    depth: 'standard' | 'exhaustive' | 'custom' | 'fast' | 'deep';
+    depth: 'standard' | 'exhaustive' | 'custom';
     pair: boolean;
     templates?: boolean;
     custom?: { databases: string[]; max_sequences?: number; pair?: boolean };

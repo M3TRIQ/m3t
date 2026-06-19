@@ -14,8 +14,7 @@ import { jobUrl, maybeOpenBrowser } from '../url.js';
 //              default; a monomer is never paired). --no-pair to force unpaired.
 // --templates also searches the PDB and saves per-chain structural templates.
 // Produces a downloadable .a3m artifact per chain (+ templates_<chain>.json).
-// (Legacy --depth fast/deep still accepted: fast = standard+unpaired, deep = standard.)
-const MSA_DEPTHS = ['standard', 'exhaustive', 'custom', 'fast', 'deep'];
+const MSA_DEPTHS = ['standard', 'exhaustive', 'custom'];
 
 export function registerMsaCommands(program: Command): void {
   program.command('msa')
@@ -98,7 +97,7 @@ async function runMsa(opts: MsaOpts): Promise<void> {
   const result = await client.createMsaJob({
     project_id: project.id,
     chains,
-    depth: depth as 'standard' | 'exhaustive' | 'custom' | 'fast' | 'deep',
+    depth: depth as 'standard' | 'exhaustive' | 'custom',
     pair,
     templates,
     custom,
