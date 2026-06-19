@@ -85,7 +85,7 @@ m3t md results <job-id>
 
 ```bash
 m3t predict esmfold MKFLILLFNILCL...        # Fast (~10s, max 1024aa)
-m3t predict alphafold2 MKFLILLFNILCL...     # Accurate (~15-20min, max 2048aa)
+m3t predict alphafold2 MKFLILLFNILCL...     # AF2-ptm monomer via deep MSA + ColabFold (~5-15min)
 
 # ESMFold2-Fast — monomer or multi-chain complex (self-hosted A100, max 2048aa total).
 # Beats AlphaFold3 on antibody-antigen DockQ from single sequence; returns pLDDT/pTM/ipTM.
@@ -95,7 +95,30 @@ m3t predict esmfold2-batch inputs.json                        # fold N complexes
 
 # Boltz-2 — biomolecular complex (protein + DNA/RNA + ligand) with binding affinity
 m3t predict boltz2 --protein MKFL... --ligand "CC(=O)O" --rna GGUC...
+
+# OpenFold3 — AlphaFold3-class complex (protein + DNA/RNA + ligand); real MSAs
+m3t predict openfold3 --protein EVQL... --protein DIQM...      # complex, auto-paired
+m3t predict openfold3 --protein MKFL... --ligand ATP --depth exhaustive
 ```
+
+## MSA Generation
+
+Generate a multiple-sequence alignment (`.a3m`) — the evolutionary input folders use.
+Two orthogonal knobs: **`--depth`** = coverage (databases), **`--pair`** = species
+pairing (only matters for multi-chain complexes; on by default, a monomer is never paired).
+
+```bash
+m3t msa --sequence MKFL...                                   # standard, monomer
+m3t msa --chain A:EVQL... --chain B:DIQM...                  # standard complex, auto-paired
+m3t msa --chain A:EVQL... --chain B:DIQM... --no-pair        # complex, force unpaired
+m3t msa --sequence MKFL... --depth exhaustive --templates    # + metagenomic envDB + PDB templates
+m3t msa --sequence MKFL... --depth custom \
+        --databases uniref30,envdb --max-sequences 300       # fine control (max_sequences caps depth)
+```
+
+- `--depth`: `standard` (UniRef30, default) | `exhaustive` (+ metagenomic envDB) | `custom`
+- `--templates`: also save per-chain PDB structural templates (`templates_<chain>.json`)
+- Output: one `.a3m` per chain in the project's Files tab; repeat sequences are cached (instant)
 
 ## Protein Embeddings
 
