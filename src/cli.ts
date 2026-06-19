@@ -27,7 +27,7 @@ const program = new Command();
 program
   .name('m3t')
   .description('M3TRIQ — protein-ligand analysis from the terminal')
-  .version('0.2.13')
+  .version('0.2.14')
   .option('--json', 'Output as JSON (machine-readable)')
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.optsWithGlobals();
