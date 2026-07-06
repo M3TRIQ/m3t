@@ -78,8 +78,11 @@ GPU-accelerated simulations to validate docking poses.
 ```bash
 m3t md run --protein 5NJ8 --ligand-smiles "CCO" --mode quick
 m3t md run --diffdock-job <job-id> --mode standard
+m3t md run --protein <oriented.pdb> --membrane            # cell-membrane MD (POPC bilayer, CHARMM36)
 m3t md results <job-id>
 ```
+
+`--membrane` runs cell-membrane MD for membrane proteins (GPCRs, transporters, ion channels): the protein is embedded in a POPC lipid bilayer with CHARMM36 instead of a plain water box. The input **must be a membrane-oriented structure** (transmembrane axis along Z, e.g. from the [OPM database](https://opm.phar.umich.edu)) — the worker does not orient the protein for you, so a raw RCSB structure produces a misaligned bilayer.
 
 ## Structure Prediction
 
@@ -93,13 +96,53 @@ m3t predict esmfold2 --sequence MKFLILLFNILCL...              # monomer
 m3t predict esmfold2 --chain A:EVQL... --chain B:DIQM...      # complex (antibody-antigen, PPI)
 m3t predict esmfold2-batch inputs.json                        # fold N complexes (results in input order)
 
+# AF2-Multimer — fold a protein complex (homo-/hetero-oligomer) with deep MSA + PDB templates
+m3t predict af2multimer --protein MKFL... --copies 3          # homotrimer (the biological unit)
+m3t predict af2multimer --protein EVQL... --protein DIQM...   # hetero-complex (distinct chains)
+m3t predict af2multimer --protein A... --protein B... --copies 2,1   # 2×A + 1×B
+
 # Boltz-2 — biomolecular complex (protein + DNA/RNA + ligand) with binding affinity
 m3t predict boltz2 --protein MKFL... --ligand "CC(=O)O" --rna GGUC...
+m3t predict boltz2 --protein MKFL... --ligand "CC(=O)O" --depth exhaustive   # + real per-chain MSAs
 
 # OpenFold3 — AlphaFold3-class complex (protein + DNA/RNA + ligand); real MSAs
 m3t predict openfold3 --protein EVQL... --protein DIQM...      # complex, auto-paired
 m3t predict openfold3 --protein MKFL... --ligand ATP --depth exhaustive
 ```
+
+## Carbohydrate / Glycan Co-folding
+
+Protein–carbohydrate interactions (e.g. lectins, phage receptor-binding proteins,
+glycan-recognizing binders) are poorly served by classical docking — Vina/GNINA
+score sugars badly. The reliable route is to **define** the glycan, then **co-fold**
+it with the protein in an AlphaFold3-class model.
+
+```bash
+# Define a glycan: IUPAC-condensed → SMILES + 3D SDF + per-residue CCD/bond decomposition
+m3t glycan build "Gal(b1-4)GlcNAc"
+m3t glycan build "Neu5Ac(a2-3)Gal(b1-4)Glc" --out sialyllactose.sdf --attach N-linked
+
+# Co-fold a protein with a glycan
+m3t predict openfold3 --protein MKFL... \
+  --glycan "Man(a1-3)[Man(a1-6)]Man(b1-4)GlcNAc(b1-4)GlcNAc" --depth exhaustive   # one connected SMILES ligand (default)
+m3t predict openfold3 --protein MKFL... --glycan "Gal(b1-4)GlcNAc" --glycan-ccd   # experimental CCD + bondedAtomPairs (see caveat)
+m3t predict boltz2    --protein MKFL... --glycan "Gal(b1-4)GlcNAc" --depth exhaustive
+```
+
+- **IUPAC-condensed**: reducing end on the **right**, linkages in `()`, branches in `[]`
+  (e.g. `Neu5Ac(a2-3)Gal(b1-4)Glc`). Common monosaccharides map to PDB CCD codes.
+- `--glycan` defaults to **one connected SMILES ligand**. The AF3-glycan literature
+  recommends per-residue CCD + `bondedAtomPairs` — but that assumes the model honors the
+  bonds, and the **hosted OpenFold3 NIM does not** (verified: a 2-sugar CCD glycan comes out
+  with the sugars ~4 Å apart, disconnected). SMILES is one bonded molecule, so it stays
+  connected. `--glycan-ccd` opts into the CCD path for AF3-proper backends — validate the
+  result with the geometry checker.
+- `--glycan` on **Boltz-2** rides as a single SMILES ligand (Boltz-2 has no inter-entity
+  bond field).
+- **pLDDT is unreliable for carbohydrates** — high confidence can accompany wrong
+  stereochemistry. Validate ring pucker / glycosidic torsions on the output.
+- `--depth exhaustive` (metagenomic envDB) is recommended for orphan / phage / bacterial
+  families where standard databases come back sparse.
 
 ## MSA Generation
 

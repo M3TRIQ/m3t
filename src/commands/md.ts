@@ -20,6 +20,7 @@ export function registerMdCommands(program: Command): void {
     .option('--mode <mode>', 'Simulation mode: quick (10ns ~1hr) or standard (50ns ~5hrs)', 'quick')
     .option('--ns <n>', 'Override simulation duration in nanoseconds (1-100)')
     .option('--temperature <K>', 'Temperature in Kelvin', '300')
+    .option('--membrane', 'Cell-membrane MD: embed the protein in a POPC lipid bilayer (CHARMM36) instead of a water box. For membrane proteins (GPCRs, transporters, channels). Provide a membrane-oriented structure (TM axis along Z, e.g. from OPM); larger system so it runs slower than a soluble-protein MD of the same length.')
     .description('Submit a molecular dynamics simulation job')
     .action(async (opts) => {
       const project = requireProject();
@@ -30,6 +31,8 @@ export function registerMdCommands(program: Command): void {
         temperature_k: parseFloat(opts.temperature),
         project_id: project.id,
       };
+
+      if (opts.membrane) params.membrane = true;
 
       // Input source: DiffDock job OR protein + ligand
       if (opts.diffdockJob) {
