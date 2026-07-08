@@ -21,15 +21,23 @@ export function registerMdCommands(program: Command): void {
     .option('--ns <n>', 'Override simulation duration in nanoseconds (1-100)')
     .option('--temperature <K>', 'Temperature in Kelvin', '300')
     .option('--membrane', 'Cell-membrane MD: embed the protein in a POPC lipid bilayer (CHARMM36) instead of a water box. For membrane proteins (GPCRs, transporters, channels). Provide a membrane-oriented structure (TM axis along Z, e.g. from OPM); larger system so it runs slower than a soluble-protein MD of the same length.')
+    .option('--gpu <type>', 'GPU backend: a100 (default, GCP A100-40GB), h100 (Nebius H100-80GB) or h200 (Nebius H200-141GB) — both Nebius GPUs are in eu-north1. Use a Nebius GPU for large membrane/complex systems that need the big VRAM, or for lower wall-clock latency; h200 has ~1.4× h100 bandwidth (MD is bandwidth-bound) for a modestly higher rate.', 'a100')
     .description('Submit a molecular dynamics simulation job')
     .action(async (opts) => {
       const project = requireProject();
       const agents = createAgentsClient();
 
+      const gpu = String(opts.gpu || 'a100').toLowerCase();
+      if (gpu !== 'a100' && gpu !== 'h100' && gpu !== 'h200') {
+        process.stderr.write(`Error: --gpu must be 'a100', 'h100' or 'h200' (got '${opts.gpu}')\n`);
+        process.exit(1);
+      }
+
       const params: Record<string, unknown> = {
         mode: opts.mode,
         temperature_k: parseFloat(opts.temperature),
         project_id: project.id,
+        gpu,
       };
 
       if (opts.membrane) params.membrane = true;
@@ -64,7 +72,7 @@ export function registerMdCommands(program: Command): void {
 
       if (opts.ns) params.simulation_ns = parseFloat(opts.ns);
 
-      process.stderr.write(`Submitting MD simulation (${opts.mode} mode)...\n`);
+      process.stderr.write(`Submitting MD simulation (${opts.mode} mode, ${gpu.toUpperCase()} GPU)...\n`);
       const data = await agents.callMcpTool('md', 'run_md_simulation', params);
 
       // Extract job ID from response

@@ -79,10 +79,14 @@ GPU-accelerated simulations to validate docking poses.
 m3t md run --protein 5NJ8 --ligand-smiles "CCO" --mode quick
 m3t md run --diffdock-job <job-id> --mode standard
 m3t md run --protein <oriented.pdb> --membrane            # cell-membrane MD (POPC bilayer, CHARMM36)
+m3t md run --protein 5NJ8 --ligand-smiles "CCO" --gpu h100 # run on an H100 (80GB VRAM)
+m3t md run --protein 5NJ8 --ligand-smiles "CCO" --gpu h200 # …or an H200 (141GB, ~1.4× bandwidth)
 m3t md results <job-id>
 ```
 
 `--membrane` runs cell-membrane MD for membrane proteins (GPCRs, transporters, ion channels): the protein is embedded in a POPC lipid bilayer with CHARMM36 instead of a plain water box. The input **must be a membrane-oriented structure** (transmembrane axis along Z, e.g. from the [OPM database](https://opm.phar.umich.edu)) — the worker does not orient the protein for you, so a raw RCSB structure produces a misaligned bilayer.
+
+`--gpu` selects the GPU backend: `a100` (default, GCP A100-40GB), `h100` (Nebius H100-80GB) or `h200` (Nebius H200-141GB) — both Nebius GPUs live in eu-north1. For typical soluble protein-ligand MD the A100 is the cost-effective default; reach for a Nebius GPU when the system is large enough to need the big VRAM (membrane bilayers, large multi-chain complexes) or when you want lower wall-clock latency. `h200` has ~1.4× the memory bandwidth of `h100` (and MD is bandwidth-bound), so it's usually a bit faster for a modestly higher rate. Nebius runs are billed at the matching GPU rate.
 
 ## Structure Prediction
 
