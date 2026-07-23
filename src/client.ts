@@ -181,6 +181,17 @@ export class M3triqClient {
     return this.request<{ job_id: string }>('POST', '/api/jobs/create_esmc_embed/', params);
   }
 
+  async createAf2MultimerComplexJob(params: {
+    project_id: string;
+    chains: { id?: string; sequence: string; count?: number }[];
+    title?: string;
+    save_structure?: boolean;
+  }): Promise<{ job_id: string; task_id?: string; n_chains?: number }> {
+    return this.request<{ job_id: string; task_id?: string; n_chains?: number }>(
+      'POST', '/api/jobs/create_af2_multimer_complex/', params,
+    );
+  }
+
   async createEsmfold2BatchJob(params: {
     project_id: string;
     inputs: { label?: string; chains: { id: string; sequence: string }[];
@@ -243,6 +254,7 @@ export class M3triqClient {
         title: params.title,
         description: params.description ?? '',
         result_data: params.result_data,
+        ...(params.prediction_inputs ? { prediction_inputs: params.prediction_inputs } : {}),
       }),
     });
     if (!res.ok) {
@@ -265,6 +277,7 @@ export class M3triqClient {
         title: params.title,
         description: params.description ?? '',
         result_data: params.result_data,
+        ...(params.prediction_inputs ? { prediction_inputs: params.prediction_inputs } : {}),
       }),
     });
     if (!res.ok) {
@@ -315,16 +328,23 @@ export class M3triqClient {
  */
 export class AgentsClient {
   private baseUrl: string;
+  private apiKey: string;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, apiKey = '') {
     this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.apiKey = apiKey;
   }
 
   async callMcpTool(server: string, tool: string, params: Record<string, unknown> = {}): Promise<McpCallResult> {
     const url = `${this.baseUrl}/mcp/call`;
+    // /mcp/call runs MCP tools with the platform's internal credentials, so it authenticates
+    // the caller and checks project access. Without this header the request is rejected 403.
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ server, tool, params }),
     });
 

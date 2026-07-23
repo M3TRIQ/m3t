@@ -143,6 +143,40 @@ export interface Boltz2JobParams {
   title: string;
   result_data: Record<string, unknown>;
   description?: string;
+  // Structured inputs (chains/ligands/glycan/depth) persisted server-side for
+  // rerun, audit, display, and depth-aware pricing.
+  prediction_inputs?: Record<string, unknown>;
+}
+
+// Glycan / carbohydrate builder (rdkit MCP build_glycan).
+export interface GlycanResidue {
+  index: number;
+  name: string;
+  ccd: string;
+}
+export interface GlycanBond {
+  child_idx: number;
+  parent_idx: number;
+  child_atom: string;
+  parent_atom: string;
+  linkage: string;
+}
+export interface GlycanBuildResult {
+  success?: boolean;
+  input?: string;
+  smiles?: string;
+  sdf?: string;
+  formula?: string;
+  molecular_weight?: number;
+  n_rotatable_bonds?: number;
+  n_residues?: number;
+  ccd_supported?: boolean;
+  residues?: GlycanResidue[];
+  bonds?: GlycanBond[];
+  reducing_end?: GlycanResidue;
+  attachment?: Record<string, unknown>;
+  ccd_note?: string;
+  error?: string;
 }
 
 // OpenFold3 (AlphaFold3-class) complex prediction via the bionemo MCP.

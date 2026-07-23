@@ -4,7 +4,8 @@ import { createAgentsClient, createClient, getConsoleUrl } from '../cli.js';
 import { requireProject } from '../config.js';
 import { output } from '../output.js';
 import { jobUrl, maybeOpenBrowser } from '../url.js';
-import type { Boltz2Ligand, Boltz2McpResult, Boltz2Polymer, Openfold3McpResult, Openfold3Molecule } from '../types.js';
+import { buildGlycanViaMcp } from './glycan.js';
+import type { Boltz2Ligand, Boltz2McpResult, Boltz2Polymer, GlycanBuildResult, Openfold3McpResult, Openfold3Molecule } from '../types.js';
 
 export function registerPredictCommands(program: Command): void {
   const predict = program.command('predict').description('Predict 3D structure from sequence (single protein or biomolecular complex)');
@@ -71,12 +72,25 @@ export function registerPredictCommands(program: Command): void {
     .option('--dna <seq>', 'DNA sequence (or @path to file). Repeatable.', collectArg, [])
     .option('--rna <seq>', 'RNA sequence (or @path to file). Repeatable.', collectArg, [])
     .option('--ligand <smiles_or_ccd>', 'Ligand as SMILES or CCD code (e.g. ATP). Repeatable.', collectArg, [])
+    .option('--glycan <iupac>', 'Carbohydrate in IUPAC-condensed notation (e.g. "Gal(b1-4)GlcNAc"); built to a SMILES ligand. Repeatable.', collectArg, [])
+    .option('--depth <tier>', 'Attach real per-chain MSAs: none (default, NIM-internal) | standard | exhaustive | custom', 'none')
     .option('--samples <n>', 'Number of structure samples (1-25, default: 1)', (v: string) => parseInt(v, 10), 1)
     .option('--recycling <n>', 'Recycling steps (1-10, default: 3)', (v: string) => parseInt(v, 10), 3)
     .option('--sampling <n>', 'Diffusion sampling steps (10-1000, default: 50)', (v: string) => parseInt(v, 10), 50)
     .option('--name <name>', 'Custom job title')
     .action(async (opts) => {
       await runBoltz2(opts);
+    });
+
+  // m3t predict af2multimer — fold a protein complex (homo-/hetero-oligomer) with AF2-Multimer
+  predict.command('af2multimer')
+    .description('Fold a protein complex (homo-/hetero-oligomer) with AF2-Multimer — deep MSA + PDB templates (self-hosted A100). Use --copies for an oligomer (e.g. a homotrimer).')
+    .option('--protein <seq>', 'Protein chain sequence (or @path to file). Repeatable for hetero-complexes (distinct chains).', collectArg, [])
+    .option('--copies <csv>', 'Copies per --protein: a single number applies to all (homomer), or a CSV paired by order (e.g. "2,1"). Default 1.', '1')
+    .option('--no-save-structure', 'Do not save the predicted structure to the project')
+    .option('--name <name>', 'Custom job title')
+    .action(async (opts) => {
+      await runAf2Multimer(opts);
     });
 
   // m3t predict openfold3
@@ -86,7 +100,9 @@ export function registerPredictCommands(program: Command): void {
     .option('--dna <seq>', 'DNA sequence (or @path to file). Repeatable.', collectArg, [])
     .option('--rna <seq>', 'RNA sequence (or @path to file). Repeatable.', collectArg, [])
     .option('--ligand <smiles_or_ccd>', 'Ligand as SMILES or CCD code (e.g. ATP). Repeatable.', collectArg, [])
-    .option('--depth <tier>', 'MSA depth for protein chains: fast | deep | exhaustive | none (default fast)', 'fast')
+    .option('--glycan <iupac>', 'Carbohydrate in IUPAC-condensed notation (e.g. "Gal(b1-4)GlcNAc"). Co-folded as one connected SMILES ligand (default — the hosted OpenFold3 NIM does NOT honor inter-residue bonds, so a CCD chain comes out disconnected). Repeatable.', collectArg, [])
+    .option('--glycan-ccd', 'EXPERIMENTAL: co-fold the glycan as per-residue CCD codes + glycosidic bondedAtomPairs (the AF3-recommended form). Verified that the hosted OpenFold3 NIM IGNORES the bonds → sugars come out ~4 A apart, disconnected; only use with a backend that honors bondedAtomPairs.')
+    .option('--depth <tier>', 'MSA depth for protein chains: standard (UniRef30, default) | exhaustive (+envDB, best for orphan/phage) | custom | none. (fast→standard, deep→exhaustive accepted)', 'standard')
     .option('--templates', 'Seed the fold with PDB structural templates per protein chain (OpenFold3 self-aligns).')
     .option('--samples <n>', 'Number of diffusion samples (1-25, default: 1)', (v: string) => parseInt(v, 10), 1)
     .option('--name <name>', 'Custom job title')
@@ -120,6 +136,8 @@ interface Boltz2Opts {
   dna: string[];
   rna: string[];
   ligand: string[];
+  glycan: string[];
+  depth: string;
   samples: number;
   recycling: number;
   sampling: number;
@@ -127,6 +145,12 @@ interface Boltz2Opts {
 }
 
 async function runBoltz2(opts: Boltz2Opts): Promise<void> {
+  const depth = normalizeMsaDepth(opts.depth || 'none');
+  if (!['none', 'standard', 'exhaustive', 'custom'].includes(depth)) {
+    process.stderr.write(`Error: --depth must be none | standard | exhaustive | custom, got "${opts.depth}".\n`);
+    process.exit(1);
+  }
+
   const polymers: Boltz2Polymer[] = [];
   for (const seq of opts.protein) polymers.push({ molecule_type: 'protein', sequence: resolveSequence(seq) });
   for (const seq of opts.dna) polymers.push({ molecule_type: 'dna', sequence: resolveSequence(seq) });
@@ -139,13 +163,25 @@ async function runBoltz2(opts: Boltz2Opts): Promise<void> {
 
   const ligands: Boltz2Ligand[] = opts.ligand.map(parseLigand);
 
+  // Glycans → SMILES ligands (Boltz-2 has no inter-entity bond field, so a glycan
+  // rides in as one SMILES molecule).
+  for (const g of opts.glycan) {
+    const built = await buildGlycanViaMcp(g, false);
+    if (!built.smiles) {
+      process.stderr.write(`Error: could not build glycan "${g}".\n`);
+      process.exit(1);
+    }
+    process.stderr.write(`Glycan "${g}" → SMILES ligand (${built.formula ?? '?'})\n`);
+    ligands.push({ smiles: built.smiles });
+  }
+
   const project = requireProject();
   const client = createClient();
   const agents = createAgentsClient();
   const consoleUrl = getConsoleUrl();
 
   const summary = describeComplex(polymers, ligands);
-  process.stderr.write(`Boltz-2: ${summary}\n`);
+  process.stderr.write(`Boltz-2: ${summary}${depth !== 'none' ? ` (MSA depth=${depth})` : ''}\n`);
   process.stderr.write('Running prediction (NVIDIA NIM, ~1-5 min)...');
 
   const startTime = Date.now();
@@ -155,6 +191,7 @@ async function runBoltz2(opts: Boltz2Opts): Promise<void> {
     diffusion_samples: opts.samples,
     recycling_steps: opts.recycling,
     sampling_steps: opts.sampling,
+    msa_depth: depth,
   });
 
   const result = mcpData as unknown as Boltz2McpResult;
@@ -183,7 +220,17 @@ async function runBoltz2(opts: Boltz2Opts): Promise<void> {
       quality: result.quality,
       num_structures_returned: result.num_structures_returned,
       diffusion_samples: result.diffusion_samples,
+      msa_depth: depth,
       model: 'boltz2',
+    },
+    prediction_inputs: {
+      model: 'boltz2',
+      msa_depth: depth,
+      n_protein: opts.protein.length,
+      n_dna: opts.dna.length,
+      n_rna: opts.rna.length,
+      ligands: ligands.length,
+      glycans: opts.glycan,
     },
   });
 
@@ -223,17 +270,24 @@ interface Openfold3Opts {
   dna: string[];
   rna: string[];
   ligand: string[];
+  glycan: string[];
+  glycanCcd?: boolean;
   depth: string;
   templates?: boolean;
   samples: number;
   name?: string;
 }
 
+interface Of3Bond {
+  atom1: [string, number, string];
+  atom2: [string, number, string];
+}
+
 async function runOpenfold3(opts: Openfold3Opts): Promise<void> {
-  const depth = (opts.depth || 'fast').toLowerCase();
-  const OF3_DEPTHS = ['fast', 'deep', 'exhaustive', 'custom', 'none'];
+  const depth = normalizeMsaDepth(opts.depth || 'standard');
+  const OF3_DEPTHS = ['standard', 'exhaustive', 'custom', 'none'];
   if (!OF3_DEPTHS.includes(depth)) {
-    process.stderr.write(`Error: --depth must be one of ${OF3_DEPTHS.join(' | ')}, got "${opts.depth}".\n`);
+    process.stderr.write(`Error: --depth must be one of ${OF3_DEPTHS.join(' | ')} (fast/deep accepted as aliases), got "${opts.depth}".\n`);
     process.exit(1);
   }
 
@@ -249,8 +303,44 @@ async function runOpenfold3(opts: Openfold3Opts): Promise<void> {
     molecules.push({ type: 'ligand', id: chainIds[ci++], ...('ccd_code' in parsed ? { ccd_codes: [parsed.ccd_code!] } : { smiles: parsed.smiles }) });
   }
 
+  // Glycans: default to ONE connected SMILES ligand. The AF3 literature recommends
+  // per-residue CCD + bondedAtomPairs, but that assumes the model honors the bonds —
+  // and the hosted OpenFold3 NIM does NOT (verified: a 2-residue CCD glycan comes out
+  // with the sugars ~4 A apart, disconnected). SMILES is one bonded molecule, so it
+  // stays connected. --glycan-ccd opts into the CCD path for AF3-proper backends.
+  const bonds: Of3Bond[] = [];
+  for (const g of opts.glycan) {
+    const built: GlycanBuildResult = await buildGlycanViaMcp(g, false);
+    const useCcd = !!opts.glycanCcd && built.ccd_supported && !!built.residues && built.residues.length > 0;
+    if (useCcd) {
+      const idxToChain: Record<number, string> = {};
+      for (const res of built.residues!) {
+        const id = chainIds[ci++];
+        idxToChain[res.index] = id;
+        molecules.push({ type: 'ligand', id, ccd_codes: [res.ccd] });
+      }
+      for (const b of built.bonds ?? []) {
+        bonds.push({
+          atom1: [idxToChain[b.child_idx], 1, b.child_atom],
+          atom2: [idxToChain[b.parent_idx], 1, b.parent_atom],
+        });
+      }
+      process.stderr.write(`Glycan "${g}" → ${built.residues!.length} sugar residues + ${built.bonds?.length ?? 0} glycosidic bonds (CCD + bondedAtomPairs) — NOTE: the hosted NIM may not honor the bonds (sugars can come out disconnected); validate with the geometry checker.\n`);
+    } else {
+      if (opts.glycanCcd && !built.ccd_supported) {
+        process.stderr.write(`Glycan "${g}": CCD decomposition unavailable (${built.ccd_note ?? 'unsupported monosaccharide/topology'}); using a single SMILES ligand.\n`);
+      }
+      if (!built.smiles) {
+        process.stderr.write(`Error: could not build glycan "${g}".\n`);
+        process.exit(1);
+      }
+      molecules.push({ type: 'ligand', id: chainIds[ci++], smiles: built.smiles });
+      process.stderr.write(`Glycan "${g}" → SMILES ligand (${built.formula ?? '?'})\n`);
+    }
+  }
+
   if (molecules.length === 0) {
-    process.stderr.write('Error: at least one --protein, --dna, --rna, or --ligand is required.\n');
+    process.stderr.write('Error: at least one --protein, --dna, --rna, --ligand, or --glycan is required.\n');
     process.exit(1);
   }
 
@@ -260,7 +350,7 @@ async function runOpenfold3(opts: Openfold3Opts): Promise<void> {
   const consoleUrl = getConsoleUrl();
 
   const summary = molecules.map(m => `${m.type}(${m.id})`).join(' + ');
-  process.stderr.write(`OpenFold3: ${summary} (depth=${depth}${opts.templates ? ', +templates' : ''})\n`);
+  process.stderr.write(`OpenFold3: ${summary} (depth=${depth}${opts.templates ? ', +templates' : ''}${bonds.length ? `, ${bonds.length} bonds` : ''})\n`);
   process.stderr.write('Running prediction (NVIDIA NIM; real MSA may cold-start the engine, up to a few min)...');
 
   const startTime = Date.now();
@@ -270,6 +360,7 @@ async function runOpenfold3(opts: Openfold3Opts): Promise<void> {
     templates: !!opts.templates,
     diffusion_samples: opts.samples,
     output_format: 'pdb',
+    ...(bonds.length > 0 ? { bonds } : {}),
   });
 
   const result = mcpData as unknown as Openfold3McpResult;
@@ -302,6 +393,18 @@ async function runOpenfold3(opts: Openfold3Opts): Promise<void> {
       templates_applied: !!result.templates_applied,
       model: 'openfold3',
     },
+    prediction_inputs: {
+      model: 'openfold3',
+      msa_depth: depth,
+      templates: !!opts.templates,
+      n_protein: opts.protein.length,
+      n_dna: opts.dna.length,
+      n_rna: opts.rna.length,
+      ligands: opts.ligand.length,
+      glycans: opts.glycan,
+      glycan_repr: opts.glycanCcd ? 'ccd+bonds' : 'smiles',
+      n_bonds: bonds.length,
+    },
   });
 
   const url = jobUrl(consoleUrl, project.id, job.job_id);
@@ -317,6 +420,7 @@ async function runOpenfold3(opts: Openfold3Opts): Promise<void> {
   if (conf.ptm !== null && conf.ptm !== undefined) lines.push(`pTM: ${conf.ptm.toFixed(3)}`);
   if (conf.plddt !== null && conf.plddt !== undefined) lines.push(`pLDDT: ${conf.plddt}`);
   if (opts.templates) lines.push(`Templates: ${result.templates_applied ? 'applied' : 'requested but not applied (NIM dropped them)'}`);
+  if (opts.glycan.length > 0) lines.push('Note: validate the glycan geometry (ring pucker / glycosidic torsions) — pLDDT is unreliable for carbohydrates.');
   lines.push(`View: ${url}`);
 
   output(
@@ -325,8 +429,70 @@ async function runOpenfold3(opts: Openfold3Opts): Promise<void> {
   );
 }
 
+interface Af2MultimerOpts {
+  protein: string[];
+  copies: string;
+  saveStructure?: boolean;
+  name?: string;
+}
+
+async function runAf2Multimer(opts: Af2MultimerOpts): Promise<void> {
+  const proteins = opts.protein.map(resolveSequence);
+  if (proteins.length === 0) {
+    process.stderr.write('Error: at least one --protein is required.\n');
+    process.exit(1);
+  }
+  // Parse --copies: a single value applies to every chain (homomer); a CSV pairs by order.
+  const copyTokens = (opts.copies || '1').split(',').map(s => parseInt(s.trim(), 10));
+  if (copyTokens.some(n => !Number.isFinite(n) || n < 1)) {
+    process.stderr.write(`Error: --copies must be positive integers, got "${opts.copies}".\n`);
+    process.exit(1);
+  }
+  const chains = proteins.map((sequence, i) => ({
+    sequence,
+    count: copyTokens.length === 1 ? copyTokens[0] : (copyTokens[i] ?? 1),
+  }));
+  const totalChains = chains.reduce((s, c) => s + c.count, 0);
+  if (totalChains > 12) {
+    process.stderr.write(`Error: total chains (with copies) is ${totalChains}; max 12.\n`);
+    process.exit(1);
+  }
+
+  const project = requireProject();
+  const client = createClient();
+  const consoleUrl = getConsoleUrl();
+
+  const summary = chains.map(c => `${c.sequence.length}aa×${c.count}`).join(' + ');
+  const result = await client.createAf2MultimerComplexJob({
+    project_id: project.id,
+    chains,
+    title: opts.name,
+    save_structure: opts.saveStructure !== false,
+  });
+
+  const url = jobUrl(consoleUrl, project.id, result.job_id);
+  maybeOpenBrowser(url);
+
+  const lines = [
+    `AF2-Multimer complex queued (${totalChains} chains: ${summary})`,
+    `Job ID: ${result.job_id.substring(0, 8)}`,
+    `Deep MSA + PDB templates; ~30-60s warm, ~5-8 min cold A100 start`,
+    `View: ${url}`,
+  ];
+  output({ job_id: result.job_id, n_chains: totalChains, chains, url }, lines.join('\n'));
+}
+
 function collectArg(value: string, prev: string[]): string[] {
   return [...prev, value];
+}
+
+// MSA depth vocabulary aligns with the MSA service (standard|exhaustive|custom|none).
+// fast/deep are accepted as legacy aliases (fast→standard, deep→exhaustive).
+function normalizeMsaDepth(d: string): string {
+  const v = (d || '').toLowerCase();
+  if (v === 'fast') return 'standard';
+  if (v === 'deep') return 'exhaustive';
+  return v;
 }
 
 function resolveSequence(input: string): string {

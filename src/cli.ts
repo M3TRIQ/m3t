@@ -28,7 +28,7 @@ const program = new Command();
 program
   .name('m3t')
   .description('M3TRIQ — protein-ligand analysis from the terminal')
-  .version('0.2.17')
+  .version('0.2.18')
   .option('--json', 'Output as JSON (machine-readable)')
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.optsWithGlobals();
@@ -105,5 +105,5 @@ export function getConsoleUrl(): string {
 /** Create an agents client for MCP tool calls. */
 export function createAgentsClient(): AgentsClient {
   const config = getEffectiveConfig();
-  return new AgentsClient(config.agents_url!);
+  return new AgentsClient(config.agents_url!, config.api_key ?? '');
 }
